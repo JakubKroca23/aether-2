@@ -2186,22 +2186,21 @@ fn control_bar_layout(
     let settings = (frame.sw - right_pad - icon, y, icon, icon);
     let saves = (frame.sw - right_pad - icon * 2.0 - gap, y, icon, icon);
 
-    // Středový mini panel: Čas + Pauza + Rychlost
+    // Středový blok: Čas + Dělítko + Pauza + Rychlost (čistě plovoucí bez panelu)
     let cx = frame.sw * 0.5;
     let ph = 38.0;
-    let time_w = 64.0;
+    let time_w = 84.0;
     let pause_w = 34.0;
     let speed_w = 34.0;
-    let pad_x = 12.0;
-    let inner_gap = 8.0;
+    let inner_gap = 14.0;
     let sep_w = 1.0;
-    let pw = pad_x * 2.0 + time_w + inner_gap + sep_w + inner_gap + pause_w + inner_gap + speed_w;
+    let pw = time_w + inner_gap + sep_w + inner_gap + pause_w + inner_gap + speed_w;
     let px0 = cx - pw * 0.5;
     let py0 = y;
     let mini_panel = (px0, py0, pw, ph);
 
-    let time_box = (px0 + pad_x, py0, time_w, ph);
-    let pause_x = px0 + pad_x + time_w + inner_gap + sep_w + inner_gap;
+    let time_box = (px0, py0, time_w, ph);
+    let pause_x = px0 + time_w + inner_gap + sep_w + inner_gap;
     let pause = (pause_x, py0 + (ph - pause_w) * 0.5, pause_w, pause_w);
     let speed = (pause_x + pause_w + inner_gap, py0 + (ph - speed_w) * 0.5, speed_w, speed_w);
 
@@ -2299,15 +2298,9 @@ fn speed_label(speed: u32) -> &'static str {
 }
 
 fn draw_center_mini_panel(font: &Option<Font>, sim_time: f32, bar: &ControlBar) {
-    let (x, y, w, h) = bar.mini_panel;
-    if w <= 0.0 || h <= 0.0 {
-        return;
-    }
-    let r = h * 0.5;
-    fill_round_rect(x, y, w, h, r, Color::new(0.015, 0.04, 0.06, 0.88));
-    stroke_round_rect(x, y, w, h, r, 1.2, Color::new(0.3, 0.65, 0.62, 0.45));
+    let (_x, y, _w, h) = bar.mini_panel;
 
-    // Formátovaný čas simulace
+    // Formátovaný čas simulace (větší font: 20 px)
     let mins = (sim_time / 60.0).floor() as u32;
     let secs = (sim_time % 60.0).floor() as u32;
     let time_str = if mins >= 60 {
@@ -2316,12 +2309,12 @@ fn draw_center_mini_panel(font: &Option<Font>, sim_time: f32, bar: &ControlBar) 
         format!("{mins}:{secs:02}")
     };
     let (tx, ty, tw, th) = bar.time_box;
-    let time_col = Color::new(0.65, 0.95, 0.90, 0.98);
-    center_text_scaled(font, &time_str, tx + tw * 0.5, ty + th * 0.62, 14, 1.0, time_col);
+    let time_col = Color::new(0.72, 0.98, 0.94, 0.98);
+    center_text_scaled(font, &time_str, tx + tw * 0.5, ty + th * 0.65, 20, 1.0, time_col);
 
-    // Vertikální dělící linka
-    let sep_x = tx + tw + 8.0;
-    draw_line(sep_x, y + 8.0, sep_x, y + h - 8.0, 1.0, Color::new(0.28, 0.55, 0.55, 0.4));
+    // Vertikální dělítko mezi časem a tlačítky
+    let sep_x = tx + tw + 14.0;
+    draw_line(sep_x, y + 6.0, sep_x, y + h - 6.0, 1.2, Color::new(0.35, 0.65, 0.65, 0.45));
 }
 
 
@@ -2333,35 +2326,23 @@ fn paint_header_icon(
     mouse: (f32, f32),
     active: bool,
     hover_t: f32,
-) -> (bool, f32, f32, Color) {
+) -> (bool, f32, f32, Color, Color) {
     let hot = hit(mouse, x, y, w, h);
     let t = smoother(hover_t.clamp(0.0, 1.0));
     let cx = x + w * 0.5;
     let cy = y + h * 0.5;
     let lit = active || hot || t > 0.35;
-    let stroke = (w * 0.045).max(1.0);
-    draw_circle(
-        cx,
-        cy,
-        w * 0.48,
-        Color::new(
-            0.08 + 0.12 * t,
-            0.18 + 0.25 * t,
-            0.2 + 0.22 * t,
-            0.55 + 0.35 * t + if active { 0.2 } else { 0.0 },
-        ),
-    );
-    if lit {
-        draw_circle_lines(cx, cy, w * 0.48, stroke, Color::new(0.45, 0.98, 0.92, 0.55 + 0.35 * t));
-    } else {
-        draw_circle_lines(cx, cy, w * 0.48, stroke, Color::new(0.3, 0.65, 0.62, 0.4));
-    }
     let ink = if lit {
-        Color::new(0.88, 1.0, 0.97, 1.0)
+        Color::new(0.96, 1.0, 0.98, 1.0)
     } else {
-        Color::new(0.65, 0.85, 0.86, 0.95)
+        Color::new(0.60, 0.80, 0.83, 0.85)
     };
-    (hot, cx, cy, ink)
+    let outline = if lit {
+        Color::new(0.35, 1.0, 0.88, 1.0)
+    } else {
+        Color::new(0.0, 0.0, 0.0, 0.0)
+    };
+    (hot, cx, cy, ink, outline)
 }
 
 fn draw_speed_menu(
@@ -2376,17 +2357,15 @@ fn draw_speed_menu(
 ) {
     let _ = frame;
     let (x, y, w, h) = ui.main;
-    let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    let speed_scale = 1.0;
-    center_text_scaled(
-        font,
-        speed_label(speed),
-        cx,
-        cy + h * 0.18,
-        14,
-        speed_scale,
-        ink,
-    );
+    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
+    let lit = outline.a > 0.05;
+    let lbl = speed_label(speed);
+    if lit {
+        for &(dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            center_text_scaled(font, lbl, cx + dx, cy + h * 0.20 + dy, 15, 1.0, outline);
+        }
+    }
+    center_text_scaled(font, lbl, cx, cy + h * 0.20, 15, 1.0, ink);
     if open {
         for (i, rect) in ui.options.iter().enumerate() {
             let (n, label) = SPEED_PRESETS[i];
@@ -2409,37 +2388,12 @@ fn paint_round_tool(
     w: f32,
     h: f32,
     mouse: (f32, f32),
-    active: bool,
-    accent: (f32, f32, f32),
+    _active: bool,
+    _accent: (f32, f32, f32),
     labeled: bool,
-    hover_t: f32,
+    _hover_t: f32,
 ) -> (bool, f32, f32) {
     let hot = hit(mouse, x, y, w, h);
-    let (ar, ag, ab) = accent;
-    let t = smoother(hover_t.clamp(0.0, 1.0));
-    if t > 0.01 {
-        let grow = 0.82 + 0.18 * t;
-        let cx = x + w * 0.5;
-        let cy = y + h * 0.5;
-        let rad = w * 0.5 * grow;
-        let edge = if active {
-            Color::new(ar, ag, ab, 0.55 + 0.4 * t)
-        } else {
-            Color::new(
-                ar * 0.55 + 0.12,
-                ag * 0.55 + 0.16,
-                ab * 0.55 + 0.16,
-                0.35 + 0.5 * t,
-            )
-        };
-        let bg = if active {
-            Color::new(ar * 0.14, ag * 0.16, ab * 0.12, 0.55 + 0.4 * t)
-        } else {
-            Color::new(0.04, 0.08, 0.1, 0.35 + 0.5 * t)
-        };
-        draw_circle(cx, cy, rad + 2.0, edge);
-        draw_circle(cx, cy, rad, bg);
-    }
     let cy = if labeled {
         y + h * 0.5 - 6.0
     } else {
@@ -2467,8 +2421,9 @@ fn draw_spawn_button(frame: &Frame, font: &Option<Font>, mouse: (f32, f32), hove
     let (x, y, w, h) = spawn_button_rect(frame);
     let (hot, cx, cy) =
         paint_round_tool(x, y, w, h, mouse, false, (0.45, 0.82, 0.98), true, hover_t);
-    draw_creature_icon(cx, cy, hot || hover_t > 0.4);
-    tool_label(font, "Jedinec", x, y, w, h, hot || hover_t > 0.4);
+    let lit = hot || hover_t > 0.35;
+    draw_creature_icon(cx, cy, lit);
+    tool_label(font, "Jedinec", x, y, w, h, lit);
 }
 
 fn draw_creature_icon(cx: f32, cy: f32, hot: bool) {
@@ -2478,10 +2433,19 @@ fn draw_creature_icon(cx: f32, cy: f32, hot: bool) {
         (cx + 12.0, cy - 7.0, 10.0, 0.92),
     ];
     let ink = if hot { 1.0 } else { 0.82 };
+    let stroke = if hot { 3.0 } else { 2.2 };
     for (x, y, r, hue) in nodes {
         let (cr, cg, cb) = hsv(hue, 0.85, ink);
         draw_circle(x, y, r, Color::new(0.03, 0.02, 0.05, 1.0));
-        draw_circle_lines(x, y, r, 2.2, Color::new(cr, cg, cb, 1.0));
+        let ring_col = if hot {
+            Color::new((cr * 0.3 + 0.7).min(1.0), (cg * 0.3 + 0.7).min(1.0), (cb * 0.3 + 0.7).min(1.0), 1.0)
+        } else {
+            Color::new(cr, cg, cb, 1.0)
+        };
+        draw_circle_lines(x, y, r, stroke, ring_col);
+        if hot {
+            draw_circle_lines(x, y, r + 1.5, 1.2, Color::new(1.0, 1.0, 1.0, 0.9));
+        }
     }
 }
 
@@ -2494,18 +2458,28 @@ fn draw_pause_button(
 ) {
     let _ = font;
     let (x, y, w, h) = bar.pause;
-    let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, paused, hover_t);
+    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, paused, hover_t);
     let u = w / 28.0;
+    let lit = outline.a > 0.05;
     if paused {
-        draw_triangle(
-            macroquad::math::Vec2::new(cx - 4.0 * u, cy - 6.5 * u),
-            macroquad::math::Vec2::new(cx - 4.0 * u, cy + 6.5 * u),
-            macroquad::math::Vec2::new(cx + 7.5 * u, cy),
-            ink,
-        );
+        let p1 = macroquad::math::Vec2::new(cx - 4.0 * u, cy - 6.5 * u);
+        let p2 = macroquad::math::Vec2::new(cx - 4.0 * u, cy + 6.5 * u);
+        let p3 = macroquad::math::Vec2::new(cx + 7.5 * u, cy);
+        draw_triangle(p1, p2, p3, ink);
+        if lit {
+            let s = 1.5;
+            draw_line(p1.x, p1.y, p2.x, p2.y, s, outline);
+            draw_line(p2.x, p2.y, p3.x, p3.y, s, outline);
+            draw_line(p3.x, p3.y, p1.x, p1.y, s, outline);
+        }
     } else {
         draw_rectangle(cx - 5.5 * u, cy - 6.5 * u, 3.4 * u, 13.0 * u, ink);
         draw_rectangle(cx + 2.0 * u, cy - 6.5 * u, 3.4 * u, 13.0 * u, ink);
+        if lit {
+            let s = 1.4;
+            draw_rectangle_lines(cx - 5.5 * u, cy - 6.5 * u, 3.4 * u, 13.0 * u, s, outline);
+            draw_rectangle_lines(cx + 2.0 * u, cy - 6.5 * u, 3.4 * u, 13.0 * u, s, outline);
+        }
     }
 }
 
@@ -2518,17 +2492,23 @@ fn draw_saves_button(
 ) {
     let _ = font;
     let (x, y, w, h) = bar.saves;
-    let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
+    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
     let u = w / 28.0;
-    let stroke = (2.0 * u).max(1.0);
-    draw_line(cx, cy - 7.0 * u, cx, cy + 2.0 * u, stroke, ink);
-    draw_triangle(
-        macroquad::math::Vec2::new(cx - 5.0 * u, cy + 0.5 * u),
-        macroquad::math::Vec2::new(cx + 5.0 * u, cy + 0.5 * u),
-        macroquad::math::Vec2::new(cx, cy + 6.5 * u),
-        ink,
-    );
-    draw_line(cx - 7.0 * u, cy + 8.0 * u, cx + 7.0 * u, cy + 8.0 * u, stroke, ink);
+    let lit = outline.a > 0.05;
+    let stroke = if lit { (2.6 * u).max(1.6) } else { (1.8 * u).max(1.0) };
+    let arrow_col = if lit { outline } else { ink };
+
+    draw_line(cx, cy - 7.0 * u, cx, cy + 2.0 * u, stroke, arrow_col);
+    let p1 = macroquad::math::Vec2::new(cx - 5.0 * u, cy + 0.5 * u);
+    let p2 = macroquad::math::Vec2::new(cx + 5.0 * u, cy + 0.5 * u);
+    let p3 = macroquad::math::Vec2::new(cx, cy + 6.5 * u);
+    draw_triangle(p1, p2, p3, ink);
+    if lit {
+        draw_line(p1.x, p1.y, p2.x, p2.y, 1.5, outline);
+        draw_line(p2.x, p2.y, p3.x, p3.y, 1.5, outline);
+        draw_line(p3.x, p3.y, p1.x, p1.y, 1.5, outline);
+    }
+    draw_line(cx - 7.0 * u, cy + 8.0 * u, cx + 7.0 * u, cy + 8.0 * u, stroke, arrow_col);
 }
 
 fn draw_dish_settings_button(
@@ -2539,20 +2519,23 @@ fn draw_dish_settings_button(
     hover_t: f32,
 ) {
     let (x, y, w, h) = bar.settings;
-    let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
+    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
     let u = w / 28.0;
-    let stroke = (1.5 * u).max(1.0);
-    draw_circle_lines(cx, cy, 5.8 * u, stroke, ink);
-    draw_circle(cx, cy, 2.0 * u, ink);
+    let lit = outline.a > 0.05;
+    let stroke = if lit { (2.2 * u).max(1.4) } else { (1.5 * u).max(1.0) };
+    let gear_col = if lit { outline } else { ink };
+
+    draw_circle_lines(cx, cy, 5.8 * u, stroke, gear_col);
+    draw_circle(cx, cy, 2.0 * u, gear_col);
     for i in 0..8 {
         let a = i as f32 / 8.0 * std::f32::consts::TAU;
         draw_line(
-            cx + a.cos() * 6.8 * u,
-            cy + a.sin() * 6.8 * u,
+            cx + a.cos() * 6.5 * u,
+            cy + a.sin() * 6.5 * u,
             cx + a.cos() * 9.8 * u,
             cy + a.sin() * 9.8 * u,
             stroke,
-            ink,
+            gear_col,
         );
     }
 }
@@ -3636,6 +3619,12 @@ fn draw_food_button(
     draw_circle(cx + 10.0, cy + 2.0, 11.0, blob);
     draw_circle(cx + 1.0, cy - 12.0, 9.0, leaf);
     draw_circle(cx - 12.0, cy - 2.0, 3.0, Color::new(0.9, 1.0, 0.85, 0.55));
+    if lit {
+        let outline = Color::new(1.0, 1.0, 1.0, 0.88);
+        draw_circle_lines(cx - 8.0, cy + 4.0, 14.0, 1.8, outline);
+        draw_circle_lines(cx + 10.0, cy + 2.0, 11.0, 1.8, outline);
+        draw_circle_lines(cx + 1.0, cy - 12.0, 9.0, 1.8, outline);
+    }
     tool_label(font, "Krmítko", x, y, w, h, lit);
 }
 

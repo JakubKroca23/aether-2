@@ -127,6 +127,7 @@
 | Maximalizovaná miska | Stůl smazán; miska je fullscreen (okraje misky = okraje okna); ekosystém vlevo nahoře, ovládací prvky nahoře uprostřed; 2 nástroje dole |
 | Přepracování krmítek | Volné umisťování kamkoliv do misky kliknutím; výchozí stav VYPNUTO; konfigurační popup přímo vedle krmítka (typ potravy, vlastnosti potravy, množství/s, disperzní rádius zobrazený kruhem, zapnutí/vypnutí, smazání) |
 | UI rozvržení a census | Census bez pozadí, menší text (15/11 px), hodnoty posunuté vlevo; tlačítka Nastavení a Uložit vpravo nahoře; čas, pauza a rychlost sloučeny do středového mini panelu |
+| Čisté ikony & hover | Horní střed čistě plovoucí (čas 20 px + dělítko + 2 tlačítka bez rámečku/panelu a bez kruhů); ikony vpravo bez kruhu; hover všech ikon bez kruhů na pozadí, pouze outline vytažení ikony kontrastní barvou |
 
 ---
 
