@@ -156,34 +156,52 @@ impl FoodSpec {
     }
 }
 
-/// Edge feeder — sits outside the dish rim and pumps nutrients inward.
+fn default_feeder_radius() -> f32 {
+    0.35
+}
+
+fn default_feeder_rate() -> f32 {
+    1.0
+}
+
+/// Nutrient feeder dispenser in the dish.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Feeder {
-    /// 0 left (−x), 1 right (+x), 2 bottom (−y), 3 top (+y)
-    pub side: u8,
-    /// Position along the edge in `[0, 1]`.
-    pub along: f32,
+    #[serde(default)]
+    pub pos: Vec2,
+    #[serde(default = "default_feeder_radius")]
+    pub radius: f32,
     pub kind: FoodKind,
-    /// Seconds between pumps.
-    pub interval: f32,
-    /// Meals released per pump.
-    pub batch: usize,
+    #[serde(default = "default_feeder_rate")]
+    pub rate: f32,
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub timer: f32,
+    // Legacy fields for backward compatibility with old saves:
+    #[serde(default)]
+    pub side: u8,
+    #[serde(default)]
+    pub along: f32,
+    #[serde(default)]
+    pub interval: f32,
+    #[serde(default)]
+    pub batch: usize,
 }
 
 impl Feeder {
-    pub fn new(side: u8, along: f32, kind: FoodKind) -> Self {
-        let defaults = FoodSpec::defaults()[kind.index()];
+    pub fn new(pos: Vec2, kind: FoodKind) -> Self {
         Self {
-            side: side.min(3),
-            along: along.clamp(0.0, 1.0),
+            pos,
+            radius: 0.35,
             kind,
-            interval: defaults.interval,
-            batch: defaults.batch.max(1),
-            enabled: true,
+            rate: 1.0,
+            enabled: false,
             timer: 0.0,
+            side: 0,
+            along: 0.0,
+            interval: 1.0,
+            batch: 1,
         }
     }
 }
@@ -774,11 +792,8 @@ impl World {
         Self::feeder_outward(side) * -1.0
     }
 
-    pub fn add_feeder(&mut self, side: u8, along: f32, kind: FoodKind) -> usize {
-        let mut f = Feeder::new(side, along, kind);
-        let spec = self.food_kinds[kind.index()];
-        f.interval = spec.interval;
-        f.batch = spec.batch.max(1);
+    pub fn add_feeder(&mut self, pos: Vec2, kind: FoodKind) -> usize {
+        let f = Feeder::new(pos, kind);
         let feeders = &mut self.primary_mut().feeders;
         feeders.push(f);
         feeders.len() - 1
@@ -806,9 +821,23 @@ impl World {
         }
     }
 
+    pub fn set_feeder_rate(&mut self, index: usize, rate: f32) {
+        if let Some(f) = self.primary_mut().feeders.get_mut(index) {
+            f.rate = rate.clamp(0.1, 20.0);
+        }
+    }
+
+    pub fn set_feeder_radius(&mut self, index: usize, radius: f32) {
+        if let Some(f) = self.primary_mut().feeders.get_mut(index) {
+            f.radius = radius.clamp(0.05, 3.0);
+        }
+    }
+
     pub fn set_feeder_interval(&mut self, index: usize, secs: f32) {
         if let Some(f) = self.primary_mut().feeders.get_mut(index) {
-            f.interval = secs.clamp(0.5, 60.0);
+            let s = secs.clamp(0.1, 60.0);
+            f.rate = 1.0 / s;
+            f.interval = s;
         }
     }
 
@@ -818,14 +847,11 @@ impl World {
         }
     }
 
-    /// Pick feeder near a world point (rim proximity).
+    /// Pick feeder near a world point.
     pub fn pick_feeder(&self, p: Vec2, max_dist: f32) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;
         for (i, f) in self.primary().feeders.iter().enumerate() {
-            let rim = self.feeder_rim_pos(f);
-            let outward = Self::feeder_outward(f.side) * 0.1;
-            let anchor = rim + outward;
-            let d = (p - anchor).length().min((p - rim).length());
+            let d = (p - f.pos).length();
             if d <= max_dist && best.map(|(_, bd)| d < bd).unwrap_or(true) {
                 best = Some((i, d));
             }
@@ -1293,7 +1319,6 @@ impl World {
     }
 
     fn tick_feeders(&mut self, dt: f32) {
-        let food_kinds = self.food_kinds;
         for di in 0..self.dishes.len() {
             let mut pumps: Vec<(usize, FoodKind, usize)> = Vec::new();
             {
@@ -1302,37 +1327,38 @@ impl World {
                     continue;
                 }
                 for (i, feeder) in dish.feeders.iter_mut().enumerate() {
-                    if !feeder.enabled || feeder.batch == 0 || feeder.interval <= 0.0 {
+                    if !feeder.enabled || feeder.rate <= 0.0 {
                         continue;
                     }
+                    let interval = (1.0 / feeder.rate).max(0.02);
                     feeder.timer += dt;
                     let mut n = 0usize;
-                    while feeder.timer >= feeder.interval {
-                        feeder.timer -= feeder.interval;
+                    while feeder.timer >= interval {
+                        feeder.timer -= interval;
                         n += 1;
+                        if n > 20 {
+                            feeder.timer = 0.0;
+                            break;
+                        }
                     }
                     if n > 0 {
-                        pumps.push((i, feeder.kind, n * feeder.batch));
+                        pumps.push((i, feeder.kind, n));
                     }
                 }
             }
             for (idx, kind, count) in pumps {
-                let (side, rim) = {
-                    let dish = &self.dishes[di];
-                    let f = &dish.feeders[idx];
-                    (f.side, dish.rim_pos(f.side, f.along))
+                let (feeder_pos, radius) = {
+                    let f = &self.dishes[di].feeders[idx];
+                    (f.pos, f.radius)
                 };
-                let inward = Self::feeder_inward(side);
-                let tangent = Vec2::new(-inward.y, inward.x);
                 for _ in 0..count {
                     if self.dishes[di].foods.len() >= FOOD_CAP {
                         break;
                     }
-                    let depth = self.rng.gen_range(0.06..0.22);
-                    let jitter = self.rng.gen_range(-0.12..0.12);
-                    let pos = self.dishes[di]
-                        .clamp_local(rim + inward * depth + tangent * jitter, 0.04);
-                    let _ = food_kinds;
+                    let angle = self.rng.gen_range(0.0..std::f32::consts::TAU);
+                    let r = self.rng.gen_range(0.0..radius.max(0.02));
+                    let offset = Vec2::new(angle.cos() * r, angle.sin() * r);
+                    let pos = self.dishes[di].clamp_local(feeder_pos + offset, 0.04);
                     self.dishes[di].foods.push(Food::fresh(pos, kind));
                 }
             }
@@ -2348,4 +2374,50 @@ mod tests {
         world.transfer_tubes();
         assert_eq!(world.organisms[0].dish_id, b);
     }
+
+    #[test]
+    fn feeder_free_placement_and_dispersion() {
+        let mut world = World::new(42);
+        world.foods_mut().clear();
+        assert_eq!(world.food_count(), 0);
+
+        // Place a feeder at (0.2, -0.3)
+        let pos = Vec2::new(0.2, -0.3);
+        let idx = world.add_feeder(pos, FoodKind::Amber);
+        assert_eq!(idx, 0);
+        assert_eq!(world.feeders().len(), 1);
+        let feeder = &world.feeders()[0];
+        assert!(!feeder.enabled, "Newly placed feeder must start disabled");
+        assert_eq!(feeder.kind, FoodKind::Amber);
+        assert_eq!(feeder.pos, pos);
+
+        // Ticking while disabled does not spawn food
+        world.tick_feeders(2.0);
+        assert_eq!(world.food_count(), 0);
+
+        // Enable feeder and configure rate & radius
+        world.set_feeder_enabled(0, true);
+        world.set_feeder_rate(0, 5.0); // 5 food/s -> every 0.2s
+        world.set_feeder_radius(0, 0.25);
+        world.tick_feeders(0.25);
+
+        assert!(world.food_count() > 0, "Enabled feeder should spawn food");
+        let spawned = &world.foods()[0];
+        assert_eq!(spawned.kind, FoodKind::Amber);
+        let dist = (spawned.pos - pos).length();
+        assert!(
+            dist <= 0.25 + 1e-4,
+            "Spawned food distance {} must be within feeder radius 0.25",
+            dist
+        );
+
+        // Pick feeder
+        assert_eq!(world.pick_feeder(Vec2::new(0.21, -0.29), 0.1), Some(0));
+        assert_eq!(world.pick_feeder(Vec2::new(0.8, 0.8), 0.1), None);
+
+        // Delete feeder
+        assert!(world.remove_feeder(0));
+        assert_eq!(world.feeders().len(), 0);
+    }
 }
+

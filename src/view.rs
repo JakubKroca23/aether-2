@@ -763,7 +763,10 @@ pub async fn run() {
         let on_saves_panel = saves_ui
             .as_ref()
             .is_some_and(|s| hit_rect(mouse, s.panel));
-        let food_ui = food_panel(&frame, food_panel_open);
+        let feeder_anchor = selected_feeder
+            .and_then(|idx| world.feeders().get(idx))
+            .map(|f| world_to_screen(&frame, &cam, f.pos));
+        let food_ui = food_panel(&frame, feeder_anchor, food_panel_open);
         let on_food_panel = food_panel_open && hit_rect(mouse, food_ui.panel);
         let on_detail = detail_hit.is_some_and(|r| hit_rect(mouse, r));
         let on_net = net_hit.is_some_and(|r| hit_rect(mouse, r));
@@ -1005,11 +1008,12 @@ pub async fn run() {
             if hit_kind_tab(mouse, &food_ui.kind_icons, &mut picked) {
                 food_edit = picked;
                 feed_kind = FoodKind::from_index(picked as usize);
-                feed_tool = true;
-                dish_tool = false;
                 if let Some(idx) = selected_feeder {
                     world.set_feeder_kind(idx, feed_kind);
                 }
+            } else if hit_rect(mouse, food_ui.close) {
+                selected_feeder = None;
+                food_panel_open = false;
             } else if hit_rect(mouse, food_ui.feeder_enable) {
                 if let Some(idx) = selected_feeder {
                     let on = world
@@ -1018,48 +1022,34 @@ pub async fn run() {
                         .map(|f| !f.enabled)
                         .unwrap_or(true);
                     world.set_feeder_enabled(idx, on);
-                } else {
-                    feed_tool = !feed_tool;
-                    if feed_tool {
-                        dish_tool = false;
-                    }
                 }
             } else if hit_rect(mouse, food_ui.feeder_delete) {
                 if let Some(idx) = selected_feeder {
                     world.remove_feeder(idx);
                     selected_feeder = None;
+                    food_panel_open = false;
                 }
-            } else if hit_rect(mouse, food_ui.food_count_minus) {
-                let kind = FoodKind::from_index(food_edit as usize);
+            } else if hit_rect(mouse, food_ui.food_rate_minus) {
                 if let Some(idx) = selected_feeder {
-                    let n = world.feeders().get(idx).map(|f| f.batch).unwrap_or(1);
-                    world.set_feeder_batch(idx, n.saturating_sub(1).max(1));
-                } else {
-                    world.set_food_kind_batch(kind, world.food_spec(kind).batch.saturating_sub(1));
+                    let r = world.feeders().get(idx).map(|f| f.rate).unwrap_or(1.0);
+                    let step = if r > 1.05 { 0.5 } else { 0.1 };
+                    world.set_feeder_rate(idx, (r - step).max(0.1));
                 }
-            } else if hit_rect(mouse, food_ui.food_count_plus) {
-                let kind = FoodKind::from_index(food_edit as usize);
+            } else if hit_rect(mouse, food_ui.food_rate_plus) {
                 if let Some(idx) = selected_feeder {
-                    let n = world.feeders().get(idx).map(|f| f.batch).unwrap_or(1);
-                    world.set_feeder_batch(idx, n + 1);
-                } else {
-                    world.set_food_kind_batch(kind, world.food_spec(kind).batch + 1);
+                    let r = world.feeders().get(idx).map(|f| f.rate).unwrap_or(1.0);
+                    let step = if r >= 1.0 { 0.5 } else { 0.1 };
+                    world.set_feeder_rate(idx, (r + step).min(10.0));
                 }
-            } else if hit_rect(mouse, food_ui.food_interval_minus) {
-                let kind = FoodKind::from_index(food_edit as usize);
+            } else if hit_rect(mouse, food_ui.food_radius_minus) {
                 if let Some(idx) = selected_feeder {
-                    let n = world.feeders().get(idx).map(|f| f.interval).unwrap_or(5.0);
-                    world.set_feeder_interval(idx, n - 0.5);
-                } else {
-                    world.set_food_kind_interval(kind, world.food_spec(kind).interval - 0.5);
+                    let r = world.feeders().get(idx).map(|f| f.radius).unwrap_or(0.35);
+                    world.set_feeder_radius(idx, (r - 0.05).max(0.10));
                 }
-            } else if hit_rect(mouse, food_ui.food_interval_plus) {
-                let kind = FoodKind::from_index(food_edit as usize);
+            } else if hit_rect(mouse, food_ui.food_radius_plus) {
                 if let Some(idx) = selected_feeder {
-                    let n = world.feeders().get(idx).map(|f| f.interval).unwrap_or(5.0);
-                    world.set_feeder_interval(idx, n + 0.5);
-                } else {
-                    world.set_food_kind_interval(kind, world.food_spec(kind).interval + 0.5);
+                    let r = world.feeders().get(idx).map(|f| f.radius).unwrap_or(0.35);
+                    world.set_feeder_radius(idx, (r + 0.05).min(2.00));
                 }
             } else if hit_rect(mouse, food_ui.food_sense_minus) {
                 let kind = FoodKind::from_index(food_edit as usize);
@@ -1083,6 +1073,7 @@ pub async fn run() {
             consumed = true;
         } else if pressed && food_panel_open && !on_food_panel && !on_food {
             food_panel_open = false;
+            selected_feeder = None;
             consumed = true;
         }
         if pressed && !consumed {
@@ -1227,16 +1218,19 @@ pub async fn run() {
             }
         }
         if pressed && on_food && !consumed {
-            food_panel_open = !food_panel_open;
+            feed_tool = !feed_tool;
             audio.play(Sfx::Ui);
-            if food_panel_open {
+            if feed_tool {
                 settings_open = false;
                 settings_section = 0;
                 speed_open = false;
                 saves_open = false;
                 save_name_focus = false;
-                feed_tool = true;
+                food_panel_open = false;
+                selected_feeder = None;
                 dish_tool = false;
+            } else {
+                food_panel_open = false;
             }
             consumed = true;
         }
@@ -1343,21 +1337,21 @@ pub async fn run() {
                             pinned = None;
                             selected_feeder = None;
                         } else if feed_tool {
-                            if let Some(idx) = world.pick_feeder(p, 0.18) {
+                            if let Some(idx) = world.pick_feeder(p, 0.20) {
                                 selected_feeder = Some(idx);
                                 food_edit = world.feeders()[idx].kind.index() as u8;
                                 feed_kind = world.feeders()[idx].kind;
                                 food_panel_open = true;
                                 audio.play(Sfx::Ui);
                             } else {
-                                let (side, along, _, _) = world.project_rim(p);
-                                let idx = world.add_feeder(side, along, feed_kind);
+                                let idx = world.add_feeder(p, feed_kind);
                                 selected_feeder = Some(idx);
                                 food_panel_open = true;
+                                feed_tool = false;
                                 audio.play(Sfx::Feeder);
                             }
                             pinned = None;
-                        } else if let Some(idx) = world.pick_feeder(p, 0.14) {
+                        } else if let Some(idx) = world.pick_feeder(p, 0.20) {
                             selected_feeder = Some(idx);
                             food_edit = world.feeders()[idx].kind.index() as u8;
                             feed_kind = world.feeders()[idx].kind;
@@ -1367,6 +1361,7 @@ pub async fn run() {
                         } else {
                             pinned = world.pick(p);
                             selected_feeder = None;
+                            food_panel_open = false;
                         }
                     }
                 } else if !moved && button == MouseButton::Right {
@@ -1374,6 +1369,7 @@ pub async fn run() {
                     feed_tool = false;
                     dish_tool = false;
                     selected_feeder = None;
+                    food_panel_open = false;
                 }
                 pointer = None;
             }
@@ -1726,9 +1722,10 @@ pub async fn run() {
         if food_panel_open {
             draw_food_panel(
                 &frame,
-            &font,
-            mouse,
+                &font,
+                mouse,
                 &food_ui,
+                feeder_anchor,
                 feed_tool,
                 feed_kind,
                 food_edit,
@@ -3302,10 +3299,6 @@ fn paint_mote(gfx: Option<&Gfx>, frame: &Frame, cam: &Cam, mote: &Mote) {
     }
 }
 
-fn feeder_draw_pos(world: &World, feeder: &Feeder) -> Vec2 {
-    let rim = world.feeder_rim_pos(feeder);
-    rim + World::feeder_outward(feeder.side) * 0.11
-}
 
 fn draw_feeders(
     frame: &Frame,
@@ -3317,38 +3310,58 @@ fn draw_feeders(
     mouse: (f32, f32),
     ui_block: bool,
 ) {
+    let scale = world_scale(frame, cam);
     for (i, feeder) in world.feeders().iter().enumerate() {
-        let pos = feeder_draw_pos(world, feeder);
+        let pos = feeder.pos;
         let (sx, sy) = world_to_screen(frame, cam, pos);
         let spec = world.food_spec(feeder.kind);
         let (cr, cg, cb) = spec.color;
         let lit = selected == Some(i);
-        let a = if feeder.enabled { 0.95 } else { 0.4 };
-        let r = if lit { 9.0 } else { 7.0 };
-        draw_circle(sx, sy, r + 3.0, Color::new(cr, cg, cb, 0.18 * a));
-        draw_circle(sx, sy, r, Color::new(cr * 0.7, cg * 0.7, cb * 0.7, 0.85 * a));
+
+        // Draw dispersion area circle when selected
+        if lit {
+            let pixel_radius = feeder.radius * scale;
+            draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.07));
+            draw_circle_lines(sx, sy, pixel_radius, 1.4, Color::new(cr, cg, cb, 0.55));
+        }
+
+        // Feeder dispenser capsule / node
+        let a = if feeder.enabled { 0.95 } else { 0.40 };
+        let r = if lit { 11.0 } else { 9.0 };
+        draw_circle(sx, sy, r + 4.0, Color::new(cr, cg, cb, 0.18 * a));
+        draw_circle(sx, sy, r, Color::new(0.08, 0.12, 0.16, 0.92));
         draw_circle_lines(
             sx,
             sy,
-            r + 1.5,
-            1.6,
-            Color::new(cr, cg, cb, if lit { 1.0 } else { 0.65 } * a),
+            r,
+            1.8,
+            Color::new(cr, cg, cb, if lit { 1.0 } else { 0.7 } * a),
         );
-        let inward = World::feeder_inward(feeder.side);
-        let tip = world_to_screen(frame, cam, pos + inward * 0.08);
-        draw_line(sx, sy, tip.0, tip.1, 2.0, Color::new(cr, cg, cb, 0.7 * a));
-    }
-    if feed_tool && !ui_block {
-        if let Some(p) = screen_to_world(frame, cam, mouse.0, mouse.1) {
-            let (side, along, rim, _) = world.project_rim(p);
-            let ghost = Feeder::new(side, along, feed_kind);
-            let pos = rim + World::feeder_outward(side) * 0.11;
-            let (sx, sy) = world_to_screen(frame, cam, pos);
-            let (cr, cg, cb) = world.food_spec(feed_kind).color;
-            draw_circle(sx, sy, 8.0, Color::new(cr, cg, cb, 0.22));
-            draw_circle_lines(sx, sy, 9.0, 1.5, Color::new(cr, cg, cb, 0.7));
-            let _ = ghost;
+        // Core indicator
+        draw_circle(
+            sx,
+            sy,
+            r * 0.45,
+            Color::new(cr, cg, cb, if feeder.enabled { 0.95 } else { 0.35 }),
+        );
+        if feeder.enabled {
+            let pulse = ((world.time() * 3.5).sin() * 0.5 + 0.5) * 2.5;
+            draw_circle_lines(sx, sy, r + 1.0 + pulse, 1.0, Color::new(cr, cg, cb, 0.6));
         }
+    }
+
+    // Ghost preview when placing new feeder
+    if feed_tool && !ui_block {
+        let (sx, sy) = (mouse.0, mouse.1);
+        let spec = world.food_spec(feed_kind);
+        let (cr, cg, cb) = spec.color;
+        let radius = 0.35;
+        let pixel_radius = radius * scale;
+        draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.06));
+        draw_circle_lines(sx, sy, pixel_radius, 1.2, Color::new(cr, cg, cb, 0.40));
+        draw_circle(sx, sy, 10.0, Color::new(0.08, 0.12, 0.16, 0.85));
+        draw_circle_lines(sx, sy, 10.0, 1.8, Color::new(cr, cg, cb, 0.80));
+        draw_circle(sx, sy, 4.5, Color::new(cr, cg, cb, 0.85));
     }
 }
 
@@ -6226,19 +6239,17 @@ struct SettingsMenu {
 }
 
 struct FoodPanel {
-    /// Union hit area (icons + attrs).
     panel: (f32, f32, f32, f32),
-    attrs: (f32, f32, f32, f32),
-    /// Stacked above the food button: 0 zelené (nearest), 1 zlaté, 2 jedovaté (top).
-    kind_icons: [(f32, f32, f32, f32); 3],
+    close: (f32, f32, f32, f32),
     feeder_enable: (f32, f32, f32, f32),
     feeder_delete: (f32, f32, f32, f32),
-    food_interval_minus: (f32, f32, f32, f32),
-    food_interval_value: (f32, f32, f32, f32),
-    food_interval_plus: (f32, f32, f32, f32),
-    food_count_minus: (f32, f32, f32, f32),
-    food_count_value: (f32, f32, f32, f32),
-    food_count_plus: (f32, f32, f32, f32),
+    kind_icons: [(f32, f32, f32, f32); 3],
+    food_rate_minus: (f32, f32, f32, f32),
+    food_rate_value: (f32, f32, f32, f32),
+    food_rate_plus: (f32, f32, f32, f32),
+    food_radius_minus: (f32, f32, f32, f32),
+    food_radius_value: (f32, f32, f32, f32),
+    food_radius_plus: (f32, f32, f32, f32),
     food_sense_minus: (f32, f32, f32, f32),
     food_sense_value: (f32, f32, f32, f32),
     food_sense_plus: (f32, f32, f32, f32),
@@ -6392,103 +6403,102 @@ fn settings_menu(
 }
 
 
-fn food_panel(frame: &Frame, open: bool) -> FoodPanel {
-    let (fx, fy, fw, _fh) = food_button_rect(frame);
+fn food_panel(frame: &Frame, anchor: Option<(f32, f32)>, open: bool) -> FoodPanel {
     let z = (0.0, 0.0, 0.0, 0.0);
-    let icon = 46.0;
-    let gap = 8.0;
-    let ix = fx + (fw - icon) * 0.5;
-    let mut kind_icons = [z; 3];
-    if open {
-        for i in 0..3 {
-            // nearest to button = zelené (0), top = jedovaté (2)
-            let y = fy - gap - (icon + gap) * (i as f32 + 1.0) + gap;
-            kind_icons[i] = (ix, y, icon, icon);
-        }
+    if !open {
+        return FoodPanel {
+            panel: z,
+            close: z,
+            feeder_enable: z,
+            feeder_delete: z,
+            kind_icons: [z; 3],
+            food_rate_minus: z,
+            food_rate_value: z,
+            food_rate_plus: z,
+            food_radius_minus: z,
+            food_radius_value: z,
+            food_radius_plus: z,
+            food_sense_minus: z,
+            food_sense_value: z,
+            food_sense_plus: z,
+            food_energy_minus: z,
+            food_energy_value: z,
+            food_energy_plus: z,
+            food_harm_minus: z,
+            food_harm_value: z,
+            food_harm_plus: z,
+        };
     }
-    let attrs_w = 268.0;
-    let attrs_h = if open { 300.0 } else { 0.0 };
-    let attrs_x = (ix + icon + 12.0).min(frame.sw - attrs_w - 8.0);
-    let icon_top = if open { kind_icons[2].1 } else { fy };
-    let icon_bot = if open {
-        kind_icons[0].1 + icon
+    let w = 270.0;
+    let h = 338.0;
+    let (x, y) = if let Some((fx, fy)) = anchor {
+        let gap = 24.0;
+        let px = if fx + gap + w <= frame.sw - 12.0 {
+            fx + gap
+        } else if fx - gap - w >= 12.0 {
+            fx - gap - w
+        } else {
+            (frame.sw - w) * 0.5
+        };
+        let py = (fy - h * 0.5).clamp(12.0, (frame.sh - h - 12.0).max(12.0));
+        (px, py)
     } else {
-        fy
+        let (bx, by, bw, _bh) = food_button_rect(frame);
+        let px = (bx + bw * 0.5 - w * 0.5).clamp(12.0, frame.sw - w - 12.0);
+        let py = (by - h - 12.0).clamp(12.0, frame.sh - h - 12.0);
+        (px, py)
     };
-    let attrs_y = (icon_top + (icon_bot - icon_top - attrs_h) * 0.5).clamp(8.0, frame.sh - attrs_h - 8.0);
-    let attrs = if open {
-        (attrs_x, attrs_y, attrs_w, attrs_h)
-    } else {
-        z
-    };
+    let panel = (x, y, w, h);
+    let close = (x + w - 30.0, y + 8.0, 22.0, 22.0);
 
-    let (
-        feeder_enable,
-        feeder_delete,
-        food_interval_minus,
-        food_interval_value,
-        food_interval_plus,
-        food_count_minus,
-        food_count_value,
-        food_count_plus,
-        food_sense_minus,
-        food_sense_value,
-        food_sense_plus,
-        food_energy_minus,
-        food_energy_value,
-        food_energy_plus,
-        food_harm_minus,
-        food_harm_value,
-        food_harm_plus,
-    ) = if open {
-        let ax = attrs_x + 12.0;
-        let aw = attrs_w - 24.0;
-        let mut yy = attrs_y + 12.0;
-        let half = (aw - 6.0) * 0.5;
-        let enable = (ax, yy, half, 28.0);
-        let delete = (ax + half + 6.0, yy, half, 28.0);
-        yy += 34.0;
-        yy += 12.0;
-        let [im, iv, ip] = stepper_row(ax, yy, aw, 26.0);
-        yy += 30.0;
-        yy += 12.0;
-        let [cm, cv, cp] = stepper_row(ax, yy, aw, 26.0);
-        yy += 30.0;
-        yy += 12.0;
-        let [sm, sv, sp] = stepper_row(ax, yy, aw, 26.0);
-        yy += 30.0;
-        yy += 12.0;
-        let [em, ev, ep] = stepper_row(ax, yy, aw, 26.0);
-        yy += 30.0;
-        yy += 12.0;
-        let [hm, hv, hp] = stepper_row(ax, yy, aw, 26.0);
-        (enable, delete, im, iv, ip, cm, cv, cp, sm, sv, sp, em, ev, ep, hm, hv, hp)
-    } else {
-        (z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z, z)
-    };
+    let pad_x = x + 14.0;
+    let pad_w = w - 28.0;
+    let mut cy = y + 36.0;
 
-    let panel = if open {
-        let left = ix.min(attrs_x) - 6.0;
-        let top = icon_top.min(attrs_y) - 6.0;
-        let right = (ix + icon).max(attrs_x + attrs_w) + 6.0;
-        let bot = icon_bot.max(attrs_y + attrs_h) + 6.0;
-        (left, top, right - left, bot - top)
-    } else {
-        z
-    };
+    let half = (pad_w - 8.0) * 0.5;
+    let feeder_enable = (pad_x, cy, half, 26.0);
+    let feeder_delete = (pad_x + half + 8.0, cy, half, 26.0);
+    cy += 34.0;
+
+    let kw = (pad_w - 12.0) / 3.0;
+    let kind_icons = [
+        (pad_x, cy, kw, 24.0),
+        (pad_x + kw + 6.0, cy, kw, 24.0),
+        (pad_x + 2.0 * (kw + 6.0), cy, kw, 24.0),
+    ];
+    cy += 30.0;
+
+    cy += 10.0;
+    let [food_rate_minus, food_rate_value, food_rate_plus] = stepper_row(pad_x, cy, pad_w, 22.0);
+    cy += 26.0;
+
+    cy += 10.0;
+    let [food_radius_minus, food_radius_value, food_radius_plus] = stepper_row(pad_x, cy, pad_w, 22.0);
+    cy += 26.0;
+
+    cy += 10.0;
+    let [food_energy_minus, food_energy_value, food_energy_plus] = stepper_row(pad_x, cy, pad_w, 22.0);
+    cy += 26.0;
+
+    cy += 10.0;
+    let [food_sense_minus, food_sense_value, food_sense_plus] = stepper_row(pad_x, cy, pad_w, 22.0);
+    cy += 26.0;
+
+    cy += 10.0;
+    let [food_harm_minus, food_harm_value, food_harm_plus] = stepper_row(pad_x, cy, pad_w, 22.0);
 
     FoodPanel {
         panel,
-        attrs,
-        kind_icons,
+        close,
         feeder_enable,
         feeder_delete,
-        food_interval_minus,
-        food_interval_value,
-        food_interval_plus,
-        food_count_minus,
-        food_count_value,
-        food_count_plus,
+        kind_icons,
+        food_rate_minus,
+        food_rate_value,
+        food_rate_plus,
+        food_radius_minus,
+        food_radius_value,
+        food_radius_plus,
         food_sense_minus,
         food_sense_value,
         food_sense_plus,
@@ -6670,191 +6680,87 @@ fn draw_food_panel(
     font: &Option<Font>,
     mouse: (f32, f32),
     ui: &FoodPanel,
-    feed_tool: bool,
-    feed_kind: FoodKind,
+    anchor: Option<(f32, f32)>,
+    _feed_tool: bool,
+    _feed_kind: FoodKind,
     edit: u8,
     selected_feeder: Option<usize>,
     feeders: &[Feeder],
     specs: &[FoodSpec; 3],
 ) {
     let _ = frame;
-    if ui.panel.2 < 8.0 {
+    let (x, y, w, h) = ui.panel;
+    if w < 8.0 || h < 8.0 {
         return;
     }
-    let dim = Color::new(0.55, 0.7, 0.76, 0.9);
-    let (ax, ay, aw, ah) = ui.attrs;
-    draw_rectangle(ax, ay, aw, ah, Color::new(0.03, 0.05, 0.08, 0.94));
-    draw_rectangle(ax, ay, aw, 1.0, Color::new(0.45, 0.95, 0.55, 0.4));
+    let selected = selected_feeder.and_then(|i| feeders.get(i));
+    let cur_kind = selected.map(|f| f.kind).unwrap_or(FoodKind::from_index(edit as usize));
+    let spec = specs[cur_kind.index()];
+    let (cr, cg, cb) = spec.color;
 
-    for (i, rect) in ui.kind_icons.iter().enumerate() {
-        let k = FoodKind::from_index(i);
-        let spec = specs[i];
-        let selected = edit as usize == i;
-        let feeding = feed_tool && feed_kind.index() == i;
-        draw_food_kind_icon(font, mouse, *rect, spec.color, k, selected, feeding);
+    // Connector line from anchor to panel
+    if let Some((fx, fy)) = anchor {
+        let edge_x = if x > fx { x } else { x + w };
+        draw_line(fx, fy, edge_x, (y + 24.0).clamp(y, y + h), 1.6, Color::new(cr, cg, cb, 0.45));
     }
 
-    let kind = FoodKind::from_index(edit as usize);
-    let spec = specs[kind.index()];
-    let selected = selected_feeder.and_then(|i| feeders.get(i));
-    let enable_on = selected.map(|f| f.enabled).unwrap_or(feed_tool);
-    let enable_label = if selected.is_some() {
-        if enable_on {
-            "Krmítko zapnuté"
-        } else {
-            "Krmítko vypnuté"
-        }
-    } else if feed_tool {
-        "Umístit krmítko"
+    // Panel background & border
+    fill_round_rect(x, y, w, h, 8.0, Color::new(0.02, 0.05, 0.08, 0.94));
+    stroke_round_rect(x, y, w, h, 8.0, 1.2, Color::new(cr, cg, cb, 0.45));
+
+    // Header
+    let gold = Color::new(0.40, 0.95, 0.85, 0.98);
+    text(font, "KRMÍTKO", x + 16.0, y + 20.0, 14, gold);
+    draw_chip(font, ui.close, "✕", false, mouse);
+
+    // Row 1: Enable / Disable + Delete
+    let is_on = selected.map(|f| f.enabled).unwrap_or(false);
+    let (on_label, on_active) = if is_on {
+        ("ZAPNUTO", true)
     } else {
-        "Vybrat / umístit"
+        ("VYPNUTO", false)
     };
-    draw_chip(font, ui.feeder_enable, enable_label, enable_on, mouse);
-    draw_chip(
-        font,
-        ui.feeder_delete,
-        "Smazat",
-        selected.is_some(),
-        mouse,
-    );
-    let interval = selected.map(|f| f.interval).unwrap_or(spec.interval);
-    let batch = selected.map(|f| f.batch).unwrap_or(spec.batch);
-    text(
-        font,
-        "interval (s)",
-        ui.food_interval_minus.0,
-        ui.food_interval_minus.1 - 2.0,
-        11,
-        dim,
-    );
-    draw_stepper(
-        font,
-        ui.food_interval_minus,
-        ui.food_interval_value,
-        ui.food_interval_plus,
-        &format!("{:.1}", interval),
-        mouse,
-    );
-    text(
-        font,
-        "dávka",
-        ui.food_count_minus.0,
-        ui.food_count_minus.1 - 2.0,
-        11,
-        dim,
-    );
-    draw_stepper(
-        font,
-        ui.food_count_minus,
-        ui.food_count_value,
-        ui.food_count_plus,
-        &format!("{}", batch),
-        mouse,
-    );
-    text(
-        font,
-        "vůně",
-        ui.food_sense_minus.0,
-        ui.food_sense_minus.1 - 2.0,
-        11,
-        dim,
-    );
-    draw_stepper(
-        font,
-        ui.food_sense_minus,
-        ui.food_sense_value,
-        ui.food_sense_plus,
-        &format!("{:.2}", spec.sense),
-        mouse,
-    );
-    text(
-        font,
-        "energie",
-        ui.food_energy_minus.0,
-        ui.food_energy_minus.1 - 2.0,
-        11,
-        dim,
-    );
-    draw_stepper(
-        font,
-        ui.food_energy_minus,
-        ui.food_energy_value,
-        ui.food_energy_plus,
-        &format!("{:.2}", spec.energy),
-        mouse,
-    );
-    text(
-        font,
-        "škoda",
-        ui.food_harm_minus.0,
-        ui.food_harm_minus.1 - 2.0,
-        11,
-        dim,
-    );
-    draw_stepper(
-        font,
-        ui.food_harm_minus,
-        ui.food_harm_value,
-        ui.food_harm_plus,
-        &format!("{:.2}", spec.harm),
-        mouse,
-    );
+    draw_chip(font, ui.feeder_enable, on_label, on_active, mouse);
+    draw_chip(font, ui.feeder_delete, "Smazat", false, mouse);
+
+    // Row 2: Food Kind Selection (3 buttons: Zelené, Jantar, Jed)
+    for (i, rect) in ui.kind_icons.iter().enumerate() {
+        let k = FoodKind::from_index(i);
+        let is_selected = cur_kind.index() == i;
+        let label = match k {
+            FoodKind::Green => "Zelené",
+            FoodKind::Amber => "Jantar",
+            FoodKind::Toxic => "Jed",
+        };
+        draw_chip(font, *rect, label, is_selected, mouse);
+    }
+
+    let dim = Color::new(0.55, 0.7, 0.76, 0.9);
+    let rate = selected.map(|f| f.rate).unwrap_or(1.0);
+    let radius = selected.map(|f| f.radius).unwrap_or(0.35);
+
+    // Row 3: Rate
+    text(font, "množství (za s)", ui.food_rate_minus.0, ui.food_rate_minus.1 - 2.0, 11, dim);
+    draw_stepper(font, ui.food_rate_minus, ui.food_rate_value, ui.food_rate_plus, &format!("{:.1} / s", rate), mouse);
+
+    // Row 4: Radius
+    text(font, "oblast (radius)", ui.food_radius_minus.0, ui.food_radius_minus.1 - 2.0, 11, dim);
+    draw_stepper(font, ui.food_radius_minus, ui.food_radius_value, ui.food_radius_plus, &format!("{:.2}", radius), mouse);
+
+    // Row 5: Energy
+    text(font, "energie", ui.food_energy_minus.0, ui.food_energy_minus.1 - 2.0, 11, dim);
+    draw_stepper(font, ui.food_energy_minus, ui.food_energy_value, ui.food_energy_plus, &format!("{:.2}", spec.energy), mouse);
+
+    // Row 6: Sense
+    text(font, "vůně", ui.food_sense_minus.0, ui.food_sense_minus.1 - 2.0, 11, dim);
+    draw_stepper(font, ui.food_sense_minus, ui.food_sense_value, ui.food_sense_plus, &format!("{:.2}", spec.sense), mouse);
+
+    // Row 7: Harm
+    text(font, "škoda / toxicita", ui.food_harm_minus.0, ui.food_harm_minus.1 - 2.0, 11, dim);
+    draw_stepper(font, ui.food_harm_minus, ui.food_harm_value, ui.food_harm_plus, &format!("{:.2}", spec.harm), mouse);
 }
 
-fn draw_food_kind_icon(
-    font: &Option<Font>,
-    mouse: (f32, f32),
-    rect: (f32, f32, f32, f32),
-    color: (f32, f32, f32),
-    kind: FoodKind,
-    selected: bool,
-    feeding: bool,
-) {
-    let (x, y, w, h) = rect;
-    let hot = hit_rect(mouse, rect);
-    let (cr, cg, cb) = color;
-    let bg = if feeding {
-        Color::new(cr * 0.25, cg * 0.25, cb * 0.25, 0.92)
-    } else if selected || hot {
-        Color::new(0.06, 0.1, 0.12, 0.92)
-    } else {
-        Color::new(0.03, 0.05, 0.07, 0.88)
-    };
-    draw_rectangle(x, y, w, h, bg);
-    let border = if feeding {
-        Color::new(cr, cg, cb, 0.95)
-    } else if selected {
-        Color::new(0.45, 0.95, 0.55, 0.7)
-    } else {
-        Color::new(0.25, 0.4, 0.42, 0.45)
-    };
-    draw_rectangle(x, y, w, 1.5, border);
-    draw_rectangle(x, y + h - 1.5, w, 1.5, border);
-    draw_rectangle(x, y, 1.5, h, border);
-    draw_rectangle(x + w - 1.5, y, 1.5, h, border);
-    let cx = x + w * 0.5;
-    let cy = y + h * 0.42;
-    draw_circle(cx - 5.0, cy + 2.0, 8.0, Color::new(cr, cg, cb, 0.95));
-    draw_circle(cx + 6.0, cy + 1.0, 6.5, Color::new(cr * 0.9, cg * 0.9, cb * 0.9, 0.95));
-    draw_circle(cx, cy - 6.0, 5.5, Color::new((cr + 0.15).min(1.0), (cg + 0.12).min(1.0), (cb + 0.1).min(1.0), 1.0));
-    let label = match kind {
-        FoodKind::Green => "Zel",
-        FoodKind::Amber => "Zla",
-        FoodKind::Toxic => "Jed",
-    };
-    center_text(
-        font,
-        label,
-        cx,
-        y + h - 6.0,
-        11,
-        if feeding || selected || hot {
-            Color::new(0.92, 0.98, 0.95, 1.0)
-        } else {
-            Color::new(0.65, 0.78, 0.8, 0.9)
-        },
-    );
-}
+
 
 
 fn draw_stepper(
