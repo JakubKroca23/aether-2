@@ -22,7 +22,8 @@
 3. **Genom je zdroj pravdy** pro topologii mozku; brain se z něj skládá a prunuje.  
 4. **Dish-local souřadnice** pro těla/jídlo; table transform přes `PetriDish::{to_table,to_local}`.  
 5. **Kill-forward ≠ food mouth** — útok je záměrný actuator, ne kolize pusy s jídlem.  
-6. **Save = bincode snapshot + SQLite meta** — payload opaque blob.
+6. **Save = bincode snapshot + SQLite meta** — payload opaque blob.  
+7. **Macroquad font rendering** — pro dynamické škálování (zoom kamery, burst animace loga) vždy používat fixní základní `font_size` a měřítko předávat přes `font_scale` (příp. `font_scale_aspect`). Dynamická změna `font_size` každým snímkem nutí CPU rastrovat glyfy do atlasu a způsobuje těžké propady FPS.
 
 ---
 

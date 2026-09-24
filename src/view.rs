@@ -1607,18 +1607,35 @@ pub async fn run() {
         );
 
         let sensor_reach = world.food_sensor_reach();
-        for (_dish_id, pos, food) in world.foods_table() {
-            let spec = world.food_spec(food.kind);
-            paint_food(
-                paint_gfx,
-                &frame,
-                &cam,
-                pos,
-                spec.sense,
-                spec.color,
-                food.bloom,
-                food.fade,
-            );
+        if let Some(g) = paint_gfx {
+            g.begin_glow();
+            for (_dish_id, pos, food) in world.foods_table() {
+                let spec = world.food_spec(food.kind);
+                paint_food_glow(
+                    g,
+                    &frame,
+                    &cam,
+                    pos,
+                    spec.sense,
+                    spec.color,
+                    food.bloom,
+                    food.fade,
+                );
+            }
+            g.end_glow();
+        } else {
+            for (_dish_id, pos, food) in world.foods_table() {
+                let spec = world.food_spec(food.kind);
+                draw_food(
+                    &frame,
+                    &cam,
+                    pos,
+                    spec.sense,
+                    spec.color,
+                    food.bloom,
+                    food.fade,
+                );
+            }
         }
         for app in &apps {
             let (hover_t, pin_t) = fade_of(&fades, app.id);
@@ -2242,8 +2259,8 @@ fn census_rect(
     let (dx, dy, dw, _dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
     let w = px(W_CENSUS, s);
     let gap = px(W_SIDE_GAP, s);
-    let title_fs = chrome_font(s, 0.042 * 1.5) as f32;
-    let row_h = px(0.052 * 1.5, s);
+    let title_fs = px(0.042 * 1.5, s).clamp(16.0, 54.0);
+    let row_h = px(0.052 * 1.5, s).clamp(16.0, 56.0);
     // 1 title + 13 body rows — enlarged by 50%.
     let h = title_fs + row_h * 1.1 + 13.0 * row_h;
     let x = dx + dw + gap;
@@ -2305,10 +2322,6 @@ fn draw_control_bar_bg(_bar: &ControlBar) {
     // Header background and border removed per user request: icons and clock float cleanly.
 }
 
-fn chrome_font(s: f32, world_em: f32) -> u16 {
-    // Follow world scale freely so table chrome zooms with the dish.
-    px(world_em, s).round().clamp(3.0, 200.0) as u16
-}
 
 fn paint_header_icon(
     x: f32,
@@ -2362,12 +2375,14 @@ fn draw_speed_menu(
     let _ = frame;
     let (x, y, w, h) = ui.main;
     let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    center_text(
+    let speed_scale = (px(0.04, bar.s) / 14.0).clamp(0.6, 2.0);
+    center_text_scaled(
         font,
         speed_label(speed),
         cx,
         cy + h * 0.18,
-        chrome_font(bar.s, 0.04),
+        14,
+        speed_scale,
         ink,
     );
     if open {
@@ -2542,6 +2557,9 @@ fn draw_dish_settings_button(
 
 
 
+const BASE_CHROME_TITLE_FS: u16 = 24;
+const BASE_CHROME_ROW_FS: u16 = 16;
+
 fn draw_census(
     frame: &Frame,
     font: &Option<Font>,
@@ -2558,9 +2576,9 @@ fn draw_census(
     let s = world_scale(frame, cam).max(1e-3);
     let c = world.census();
     let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, true);
-    let title_fs = chrome_font(s, 0.042 * 1.5);
-    let row_fs = chrome_font(s, 0.036 * 1.5);
-    let row_h = px(0.052 * 1.5, s);
+    let title_scale = (px(0.042 * 1.5, s) / BASE_CHROME_TITLE_FS as f32).clamp(0.65, 2.2);
+    let row_scale = (px(0.036 * 1.5, s) / BASE_CHROME_ROW_FS as f32).clamp(0.65, 2.2);
+    let row_h = px(0.052 * 1.5, s).clamp(16.0, 56.0);
     let mins = (world.time() / 60.0).floor() as u32;
     let secs = (world.time() % 60.0).floor() as u32;
     let time_str = if mins >= 60 {
@@ -2589,22 +2607,23 @@ fn draw_census(
     let dim = Color::new(0.62, 0.8, 0.84, 0.85);
     let gold = Color::new(0.40, 0.95, 0.85, 0.98);
     let time_col = Color::new(0.70, 0.95, 0.92, 0.95);
-    let mut yy = y + title_fs as f32;
-    let value_x = x + px(0.36, s);
+    let mut yy = y + BASE_CHROME_TITLE_FS as f32 * title_scale;
+    let value_x = x + px(0.36, s).clamp(140.0, 480.0);
     for (i, (label, value, header)) in lines.iter().enumerate() {
         if *header {
-            text(font, label, x, yy, title_fs, gold);
-            text(font, value, value_x, yy, title_fs, time_col);
+            text_scaled(font, label, x, yy, BASE_CHROME_TITLE_FS, title_scale, gold);
+            text_scaled(font, value, value_x, yy, BASE_CHROME_TITLE_FS, title_scale, time_col);
             yy += row_h * 1.1;
             continue;
         }
-        text(font, label, x, yy, row_fs, dim);
-        text(
+        text_scaled(font, label, x, yy, BASE_CHROME_ROW_FS, row_scale, dim);
+        text_scaled(
             font,
             value,
             value_x,
             yy,
-            row_fs,
+            BASE_CHROME_ROW_FS,
+            row_scale,
             if i == 2 { ink } else { dim },
         );
         yy += row_h;
@@ -2714,12 +2733,14 @@ fn draw_empty_life_button(
         stroke,
         Color::new(0.4 + 0.3 * t, 0.95, 0.88, 0.55 + 0.35 * t),
     );
-    center_text(
+    let btn_scale = (px(0.045, s) / 16.0).clamp(0.6, 2.2);
+    center_text_scaled(
         font,
         "Nový život",
         x + w * 0.5,
         y + h * 0.68,
-        chrome_font(s, 0.045),
+        16,
+        btn_scale,
         Color::new(0.82 + 0.15 * t, 0.98, 0.94, 1.0),
     );
     rect
@@ -3000,6 +3021,55 @@ fn paint_dish_cutout(
     }
 }
 
+fn paint_food_glow(
+    g: &Gfx,
+    frame: &Frame,
+    cam: &Cam,
+    pos: Vec2,
+    sense: f32,
+    color: (f32, f32, f32),
+    bloom: f32,
+    fade: Option<f32>,
+) {
+    let (x, y) = world_to_screen(frame, cam, pos);
+    let scale = world_scale(frame, cam);
+    let (cr, cg, cb) = color;
+    let bloom_e = {
+        let t = bloom.clamp(0.0, 1.0);
+        1.0 - (1.0 - t) * (1.0 - t)
+    };
+    let outer = (sense * bloom_e * scale).max(if bloom_e > 0.02 { 6.0 } else { 0.0 });
+    let fade_u = fade.unwrap_or(-1.0);
+    if outer > 0.5 {
+        g.soft_blob_cont(
+            x,
+            y,
+            outer,
+            Color::new(cr, cg, cb, 0.55),
+            2.2,
+            fade_u,
+            0.0,
+        );
+    }
+    let core_a = if fade_u < 0.0 {
+        1.0
+    } else {
+        (1.0 - fade_u / 0.18).clamp(0.0, 1.0)
+    };
+    if core_a > 0.02 {
+        let core = (0.012 * scale).max(2.2);
+        g.soft_blob_cont(
+            x,
+            y,
+            core * 3.2,
+            Color::new(cr, cg, cb, 0.9 * core_a),
+            1.4,
+            -1.0,
+            0.55 * core_a,
+        );
+    }
+}
+
 fn paint_food(
     gfx: Option<&Gfx>,
     frame: &Frame,
@@ -3011,43 +3081,9 @@ fn paint_food(
     fade: Option<f32>,
 ) {
     if let Some(g) = gfx {
-        let (x, y) = world_to_screen(frame, cam, pos);
-        let scale = world_scale(frame, cam);
-        let (cr, cg, cb) = color;
-        let bloom_e = {
-            let t = bloom.clamp(0.0, 1.0);
-            1.0 - (1.0 - t) * (1.0 - t)
-        };
-        let outer = (sense * bloom_e * scale).max(if bloom_e > 0.02 { 6.0 } else { 0.0 });
-        let fade_u = fade.unwrap_or(-1.0);
-        if outer > 0.5 {
-            g.soft_blob(
-                x,
-                y,
-                outer,
-                Color::new(cr, cg, cb, 0.55),
-                2.2,
-                fade_u,
-                0.0,
-            );
-        }
-        let core_a = if fade_u < 0.0 {
-            1.0
-        } else {
-            (1.0 - fade_u / 0.18).clamp(0.0, 1.0)
-        };
-        if core_a > 0.02 {
-            let core = (0.012 * scale).max(2.2);
-            g.soft_blob(
-                x,
-                y,
-                core * 3.2,
-                Color::new(cr, cg, cb, 0.9 * core_a),
-                1.4,
-                -1.0,
-                0.55 * core_a,
-            );
-        }
+        g.begin_glow();
+        paint_food_glow(g, frame, cam, pos, sense, color, bloom, fade);
+        g.end_glow();
     } else {
         draw_food(frame, cam, pos, sense, color, bloom, fade);
     }
@@ -5864,7 +5900,7 @@ fn draw_neon_logo(
     // Radial blur streaks — ghost logo passes outward from center.
     let radial = (blur * 0.85 + burst * 0.55).clamp(0.0, 1.0);
     if radial > 0.05 {
-        let ghosts = 3;
+        let ghosts = 2;
         for g in 1..=ghosts {
             let t = g as f32 / ghosts as f32;
             let stretch = 1.0 + radial * (0.06 + 0.14 * t);
@@ -5881,21 +5917,24 @@ fn draw_neon_logo(
                     ga,
                     time,
                     burst,
+                    true,
                 );
             }
-            draw_logo_dna(
-                gfx,
-                dna_cx,
-                dna_cy,
-                mouse,
-                time,
-                dna_s * stretch,
-                dna_a * (0.2 / ghosts as f32),
-                0.0,
-                1.05,
-                dna_park,
-                burst * (0.7 + 0.3 * t),
-            );
+            if burst < 0.6 {
+                draw_logo_dna(
+                    gfx,
+                    dna_cx,
+                    dna_cy,
+                    mouse,
+                    time,
+                    dna_s * stretch,
+                    dna_a * (0.2 / ghosts as f32),
+                    0.0,
+                    1.05,
+                    dna_park,
+                    burst * (0.7 + 0.3 * t),
+                );
+            }
         }
     }
 
@@ -5903,12 +5942,14 @@ fn draw_neon_logo(
         gfx, dna_cx, dna_cy, mouse, time, dna_s, dna_a, 0.0, 0.45, dna_park, burst,
     );
     if letter_a > 0.02 {
-        paint_logo_wordmark(gfx, font, lx, ly, mouse, letter_scale, letter_a, time, burst);
+        paint_logo_wordmark(gfx, font, lx, ly, mouse, letter_scale, letter_a, time, burst, false);
     }
     draw_logo_dna(
         gfx, dna_cx, dna_cy, mouse, time, dna_s, dna_a * 1.04, 0.40, 1.05, dna_park, burst,
     );
 }
+
+const BASE_LOGO_FS: u16 = 72;
 
 /// Stretched glass wordmark — organic per-layer motion; burst flies letters at camera.
 fn paint_logo_wordmark(
@@ -5921,6 +5962,7 @@ fn paint_logo_wordmark(
     alpha: f32,
     time: f32,
     burst: f32,
+    is_ghost: bool,
 ) {
     let a = alpha.clamp(0.0, 1.0);
     if a < 0.02 {
@@ -5969,11 +6011,11 @@ fn paint_logo_wordmark(
 
     let mut advances = [0.0_f32; 6];
     let mut total_w = 0.0;
-    let size_u_base = size as u16;
+    let base_scale = size / BASE_LOGO_FS as f32;
     for (i, ch) in WORD.chars().enumerate() {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
-        let w = measure_text(s, font.as_ref(), size_u_base, 1.0).width * aspect;
+        let w = measure_text(s, font.as_ref(), BASE_LOGO_FS, 1.0).width * base_scale * aspect;
         advances[i] = w + tracking;
         total_w += advances[i];
     }
@@ -6028,21 +6070,24 @@ fn paint_logo_wordmark(
     };
 
     // Soft glass halo only — fades as burst takes over.
-    if let Some(g) = gfx {
-        g.begin_glow();
-        g.soft_blob_cont(
-            lx,
-            ly,
-            total_w * 0.52 + size * 0.3,
-            Color::new(0.28, 0.86, 0.92, 0.035 * a * (1.0 - burst_e)),
-            2.7,
-            -1.0,
-            0.0,
-        );
-        g.end_glow();
+    if !is_ghost {
+        if let Some(g) = gfx {
+            g.begin_glow();
+            g.soft_blob_cont(
+                lx,
+                ly,
+                total_w * 0.52 + size * 0.3,
+                Color::new(0.28, 0.86, 0.92, 0.035 * a * (1.0 - burst_e)),
+                2.7,
+                -1.0,
+                0.0,
+            );
+            g.end_glow();
+        }
     }
 
-    for layer in 0..3 {
+    let layer_range = if is_ghost { 1..2 } else { 0..3 };
+    for layer in layer_range {
         let (op, blur_mul, scatter) = layer_style(layer);
         let mut x = base_x;
         for (i, ch) in WORD.chars().enumerate() {
@@ -6078,8 +6123,8 @@ fn paint_logo_wordmark(
             let gx = x + ox;
             let gy = base_y + oy;
             let cw = advances[i] - tracking;
-            let glyph_size = (size * zoom).clamp(20.0, 280.0);
-            let size_u = glyph_size as u16;
+            let glyph_size = (size * zoom).clamp(20.0, 360.0);
+            let glyph_scale = glyph_size / BASE_LOGO_FS as f32;
 
             // Diagonal sample: left→right + top→bottom (šikmo dolů).
             let x_n = ((gx + cw * 0.5 * zoom - base_x) / total_w.max(1.0)).clamp(0.0, 1.0);
@@ -6099,7 +6144,13 @@ fn paint_logo_wordmark(
                 op * 0.55 * (la / a.max(1e-3)),
             );
 
-            let blur_steps = if burst > 0.2 { 3 } else { 6 };
+            let blur_steps = if is_ghost {
+                1
+            } else if burst > 0.2 {
+                2
+            } else {
+                5
+            };
             for b in 0..blur_steps {
                 let t = (b as f32 + 1.0) / (blur_steps as f32 + 1.0);
                 let ang = t * std::f32::consts::TAU + i as f32 * 0.85 + layer as f32 * 0.4;
@@ -6110,31 +6161,33 @@ fn paint_logo_wordmark(
                     glyph,
                     gx + ang.cos() * r,
                     gy + ang.sin() * r * 0.78,
-                    size_u,
+                    glyph_scale,
                     aspect,
                     Color::new(body.r, body.g, body.b, ba),
                 );
             }
 
-            text_stretched(
-                font,
-                glyph,
-                gx + 1.0,
-                gy + 1.1,
-                size_u,
-                aspect,
-                Color::new(0.0, 0.02, 0.04, 0.035 * la),
-            );
-            text_stretched(font, glyph, gx, gy, size_u, aspect, body);
-            text_stretched(font, glyph, gx - 0.55, gy - 0.65, size_u, aspect, rim);
+            if !is_ghost {
+                text_stretched(
+                    font,
+                    glyph,
+                    gx + 1.0,
+                    gy + 1.1,
+                    glyph_scale,
+                    aspect,
+                    Color::new(0.0, 0.02, 0.04, 0.035 * la),
+                );
+            }
+            text_stretched(font, glyph, gx, gy, glyph_scale, aspect, body);
+            text_stretched(font, glyph, gx - 0.55, gy - 0.65, glyph_scale, aspect, rim);
 
-            if layer == 2 {
+            if !is_ghost && layer == 2 {
                 text_stretched(
                     font,
                     glyph,
                     gx - 0.3,
                     gy - 0.8,
-                    size_u,
+                    glyph_scale,
                     aspect,
                     Color::new(hr, hg, hb, 0.10 * la),
                 );
@@ -6143,7 +6196,7 @@ fn paint_logo_wordmark(
                     glyph,
                     gx + 0.4,
                     gy - 1.2,
-                    size_u,
+                    glyph_scale,
                     aspect,
                     Color::new(
                         0.70 + hr * 0.30,
@@ -6164,7 +6217,7 @@ fn text_stretched(
     s: &str,
     x: f32,
     y: f32,
-    size: u16,
+    scale: f32,
     aspect: f32,
     color: Color,
 ) {
@@ -6176,8 +6229,8 @@ fn text_stretched(
                 y,
                 TextParams {
                     font: Some(f),
-                    font_size: size,
-                    font_scale: 1.0,
+                    font_size: BASE_LOGO_FS,
+                    font_scale: scale,
                     font_scale_aspect: aspect,
                     color,
                     ..Default::default()
@@ -6185,7 +6238,7 @@ fn text_stretched(
             );
         }
         None => {
-            draw_text(s, x, y, size as f32, color);
+            draw_text(s, x, y, BASE_LOGO_FS as f32 * scale, color);
         }
     }
 }
@@ -7874,6 +7927,49 @@ fn text(font: &Option<Font>, s: &str, x: f32, y: f32, size: u16, color: Color) {
             draw_text(s, x, y, size as f32, color);
         }
     }
+}
+
+fn text_scaled(
+    font: &Option<Font>,
+    s: &str,
+    x: f32,
+    y: f32,
+    base_size: u16,
+    scale: f32,
+    color: Color,
+) {
+    match font {
+        Some(f) => {
+            draw_text_ex(
+                s,
+                x,
+                y,
+                TextParams {
+                    font: Some(f),
+                    font_size: base_size,
+                    font_scale: scale,
+                    color,
+                    ..Default::default()
+                },
+            );
+        }
+        None => {
+            draw_text(s, x, y, base_size as f32 * scale, color);
+        }
+    }
+}
+
+fn center_text_scaled(
+    font: &Option<Font>,
+    label: &str,
+    cx: f32,
+    y: f32,
+    base_size: u16,
+    scale: f32,
+    color: Color,
+) {
+    let width = measure_text(label, font.as_ref(), base_size, 1.0).width * scale;
+    text_scaled(font, label, cx - width * 0.5, y, base_size, scale, color);
 }
 
 fn world_scale(frame: &Frame, cam: &Cam) -> f32 {
