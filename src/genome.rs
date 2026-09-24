@@ -276,6 +276,28 @@ impl Genome {
             }
         }
     }
+
+    /// Explicit user-triggered mutation: always flips several gene bits and nudges morphology.
+    pub fn mutate_noticeable(&mut self, rng: &mut impl Rng) {
+        if !self.genes.is_empty() {
+            let flips = rng.gen_range(2..=5);
+            for _ in 0..flips {
+                let g = rng.gen_range(0..self.genes.len());
+                let b = rng.gen_range(0..32);
+                self.genes[g].data ^= 1 << b;
+            }
+        }
+        self.morph.hue = wrap_unit(self.morph.hue + gaussian(rng) * 0.06 + 0.03);
+        self.morph.radius = (self.morph.radius + gaussian(rng) * 0.006).clamp(0.04, 0.09);
+        self.morph.mass = (self.morph.mass + gaussian(rng) * 0.08).clamp(0.4, 1.4);
+        self.morph.hetero = (self.morph.hetero + gaussian(rng) * 0.06).clamp(0.25, 1.3);
+        self.morph.setpoint = (self.morph.setpoint + gaussian(rng) * 0.05).clamp(0.55, 1.3);
+        self.morph.learn = (self.morph.learn + gaussian(rng) * 0.04).clamp(0.03, 0.4);
+        if rng.gen_bool(0.25) {
+            let step: i32 = if rng.gen_bool(0.5) { 1 } else { -1 };
+            self.morph.nodes = (self.morph.nodes as i32 + step).clamp(NODES_MIN as i32, NODES_MAX as i32) as u8;
+        }
+    }
 }
 
 #[cfg(test)]

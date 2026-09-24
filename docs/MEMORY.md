@@ -128,6 +128,12 @@
 | Přepracování krmítek | Volné umisťování kamkoliv do misky kliknutím; výchozí stav VYPNUTO; konfigurační popup přímo vedle krmítka (typ potravy, vlastnosti potravy, množství/s, disperzní rádius zobrazený kruhem, zapnutí/vypnutí, smazání) |
 | UI rozvržení a census | Census bez pozadí, menší text (15/11 px), hodnoty posunuté vlevo; tlačítka Nastavení a Uložit vpravo nahoře; čas, pauza a rychlost sloučeny do středového mini panelu |
 | Čisté ikony & hover | Horní střed čistě plovoucí (čas 20 px + dělítko + 2 tlačítka bez rámečku/panelu a bez kruhů); ikony vpravo bez kruhu; hover všech ikon bez kruhů na pozadí, pouze outline vytažení ikony kontrastní barvou |
+| Minimalistický header & census | Tlačítko „Nový život“ v misce odstraněno; přehled EKOSYSTÉM sbalitelný klikem do nadpisu (šipka ▸ / ▾); tlačítka nastavení a uložení vpravo nahoře jako text (NASTAVENÍ, ULOŽIT); pauza přesunuta vlevo od času simulace, vertikální dělítko odstraněno |
+| Odlehčené pozadí & submenu | Fragmentový shader vody odlehčen od drahého 3-oktávového šumu na rychlé analytické proudění pro plynulý běh; odstraněna šipka u nadpisu EKOSYSTÉM (zůstal čistý text); submenu Nastavení zcela bez rámečku/pozadí s bílou typografií a sbalitelnými sekcemi |
+| Horní lišta & zjednodušené nastavení | EKOSYSTÉM přejmenován na INFO; tlačítka ULOŽIT a NASTAVENÍ přesunuta doleva vedle INFO; v nastavení ponecháno pouze Prostředí (odpor a okraje) s čistým nadpisem bez šipky |
+| Modrofialová miska & kolečko krmítka | Pozadí v misce přebarveno do tmavé modrofialové / indigové palety; při aktivním umisťování krmítka lze kolečkem myši plynule měnit oblast rozptylu s okamžitým ghost preview a bez zoomování kamery |
+| Vzhled krmítek & mutace kliknutím | Krmítka mají zaoblený čtvercový uzel s ikonou potravy a textovým labelem; spodní tlačítko nese ikonu potravy, badge s počtem aktivních krmítek a hover zvýrazní všechna krmítka; kliknutí na organismus vyvolá novou mutaci bez otevření okna detailu |
+| Rychlé hover ovládání & badge krmítek | Popisek pod krmítkem odstraněn (čistá plocha); při hoveru nad krmítkem se zobrazí vypínač ZAP/VYP a tlačítka −/+ pro rychlou změnu intervalu dávkování; spodní badge zobrazuje celkový počet krmítek bez ohledu na zapnutí |
 
 ---
 

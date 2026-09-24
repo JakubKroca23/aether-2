@@ -31,32 +31,6 @@ uniform float dish_corner;
 uniform vec2 cam_offset;
 uniform float cam_zoom;
 
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
-}
-
-float dist_to_dish(vec2 p, vec4 rect, float corner, float screen_aspect) {
-    vec2 center = (rect.xy + rect.zw) * 0.5;
-    vec2 half_size = (rect.zw - rect.xy) * 0.5;
-    vec2 delta = p - center;
-    delta.x *= screen_aspect;
-    half_size.x *= screen_aspect;
-    float r = min(corner, min(half_size.x, half_size.y) * 0.45);
-    vec2 q = abs(delta) - (half_size - vec2(r));
-    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
-}
-
 void main() {
     vec2 local = (uv - 0.5) * 2.0;
     vec2 world;
@@ -66,93 +40,45 @@ void main() {
         world = vec2(local.x * max(aspect, 0.25), -local.y);
     }
 
+    // Jemný radiální gradient hloubky
     float edge = max(abs(local.x), abs(local.y));
-    // Soft depth falloff — keep teal to the window edge (no black letterbox rim).
-    float rim = smoothstep(0.88, 1.05, edge) * 0.35;
+    float rim = smoothstep(0.85, 1.15, edge) * 0.35;
     float depth = rim * rim;
 
-    vec3 deep = vec3(0.022, 0.07, 0.09);
-    vec3 mid = vec3(0.055, 0.155, 0.175);
+    vec3 deep = vec3(0.024, 0.018, 0.055);
+    vec3 mid = vec3(0.062, 0.048, 0.135);
     vec3 col = mix(deep, mid, (1.0 - depth) * 0.7);
 
-    // Signed distance to nearest dish: < 0 is inside dish, > 0 is outside on table
-    float dish_dist = 999.0;
-    if (dish_count > 0.5) {
-        dish_dist = min(dish_dist, dist_to_dish(uv, dish0, dish_corner, aspect));
-    }
-    if (dish_count > 1.5) {
-        dish_dist = min(dish_dist, dist_to_dish(uv, dish1, dish_corner, aspect));
-    }
-    if (dish_count > 2.5) {
-        dish_dist = min(dish_dist, dist_to_dish(uv, dish2, dish_corner, aspect));
-    }
-    if (dish_count > 3.5) {
-        dish_dist = min(dish_dist, dist_to_dish(uv, dish3, dish_corner, aspect));
-    }
+    // Rychlé proudění tekutiny (rychlé analytické vlny místo těžkého procedurálního šumu)
+    vec2 w1 = world * 1.5;
+    float t1 = time * 0.35;
+    float wave1 = sin(w1.x + t1) * cos(w1.y * 0.8 + t1 * 0.7);
+    float wave2 = sin(w1.x * 0.7 - w1.y * 1.1 - t1 * 0.5);
+    float fluid = wave1 * 0.5 + wave2 * 0.5;
 
-    // Gate: dish boundary blocks the surrounding green fog from getting inside
-    float fog_gate = 1.0;
-    float wall_press = 0.0;
-    if (dish_count > 0.5) {
-        fog_gate = smoothstep(-0.003, 0.012, dish_dist);
-        wall_press = smoothstep(0.07, 0.004, dish_dist) * smoothstep(-0.002, 0.008, dish_dist);
-    }
+    // Decentní modrofialová bioluminiscence v tekutině
+    vec3 violet_flow = vec3(0.075, 0.048, 0.160);
+    col += violet_flow * (0.35 + 0.35 * fluid) * (1.0 - depth * 0.5);
 
-    float n1 = noise(world * 1.8 + vec2(time * 0.07, time * 0.05));
-    float n2 = noise(world * 3.2 - vec2(time * 0.04, -time * 0.06));
-    float n3 = noise(world * 0.85 + vec2(-time * 0.03, time * 0.04));
-    float cloud = n1 * 0.42 + n2 * 0.33 + n3 * 0.35;
-    // Green/teal volume clouds in the fluid — stopped by the dish boundary!
-    vec3 green = vec3(0.06, 0.22, 0.15);
-    col += green * cloud * (0.90 + 0.45 * wall_press) * fog_gate;
-    col += vec3(0.03, 0.15, 0.16) * cloud * (1.0 - depth) * 0.45 * fog_gate;
+    // Odlehčená optická kaustika tekutiny
+    vec2 q = world * 2.2;
+    float caust = sin(q.x * 2.5 + q.y * 1.8 + time * 0.75) * cos(q.x * 1.7 - q.y * 2.3 - time * 0.6);
+    caust = caust * caust; // hladké zjasnění hřebenů vln
+    col += vec3(0.48, 0.42, 0.92) * caust * 0.060 * (1.0 - depth * 0.6);
 
-    if (dish_count > 0.5) {
-        // Clear water clarity inside the dish (luminous, pristine medium)
-        float inside = smoothstep(0.002, -0.015, dish_dist);
-        col += vec3(0.01, 0.035, 0.04) * inside;
-        // Subtle outer glass contact sheen where the fog meets the dish wall
-        float glass_contact = exp(-dish_dist * dish_dist * 8000.0) * smoothstep(-0.004, 0.004, dish_dist);
-        col += vec3(0.12, 0.35, 0.30) * glass_contact * 0.25;
-    }
-
-    vec2 q = world * 2.4;
-    q += 0.35 * vec2(
-        sin(q.y * 1.7 + time * 0.55),
-        cos(q.x * 1.5 - time * 0.45)
-    );
-    float c1 = sin(q.x * 3.1 + time * 0.8) * sin(q.y * 2.7 - time * 0.6);
-    float c2 = sin((q.x + q.y) * 2.2 + time * 0.35);
-    float caust = pow(0.5 + 0.5 * c1 * c2, 2.0);
-    col += vec3(0.4, 0.85, 0.95) * caust * 0.08 * (1.0 - depth * 0.65);
-
-    vec2 cell = floor(world * 14.0);
-    vec2 f = fract(world * 14.0) - 0.5;
-    float h = hash(cell);
-    float tw = 0.5 + 0.5 * sin(time * 1.6 + h * 40.0);
-    float bub = smoothstep(0.18, 0.02, length(f - vec2(h - 0.5, fract(h * 7.1) - 0.5) * 0.35));
-    // Floor dots: only outside the dish (blocked inside the dish)
-    col += vec3(0.7, 0.92, 0.98) * bub * tw * 0.04 * (1.0 - rim) * fog_gate;
-
-    // Cursor: brighten floor dots AND thin/clear the green gel.
+    // Kurzorem ovládané prosvětlení / průzračnost
     if (light_rad > 0.001) {
         vec2 duv = (uv - light_uv) * vec2(max(light_aspect, 0.25), 1.0);
         float d = length(duv) / max(light_rad, 1e-4);
-        float floor_l = exp(-d * d * 2.8);
-        float clear_l = exp(-d * d * 1.6);
-        col += vec3(0.65, 0.95, 1.0) * bub * tw * floor_l * 0.55 * (1.0 - rim) * fog_gate;
-        // Pull green volume toward clearer water (looks like transparency).
-        vec3 clear_water = vec3(0.10, 0.18, 0.20);
-        col = mix(col, clear_water, clear_l * 0.55);
-        // Extra: strip residual green saturation under the cursor.
-        float g_excess = max(col.g - col.r * 0.85, 0.0);
-        col.g -= g_excess * clear_l * 0.65;
-        col.b = mix(col.b, col.b * 0.85 + 0.08, clear_l * 0.35);
+        if (d < 3.0) {
+            float clear_l = exp(-d * d * 1.6);
+            vec3 clear_water = vec3(0.12, 0.09, 0.24);
+            col = mix(col, clear_water, clear_l * 0.45);
+        }
     }
 
-    // Mild edge shade only — stay in the teal family.
     col = mix(col, mid * 0.85, rim * 0.4);
-    float vig = 1.0 - 0.08 * pow(edge, 3.0);
+    float vig = 1.0 - 0.08 * (edge * edge * edge);
     col *= vig;
 
     gl_FragColor = vec4(col, 1.0);

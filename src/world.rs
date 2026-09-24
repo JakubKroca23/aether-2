@@ -736,6 +736,23 @@ impl World {
         self.dishes.iter().map(|d| d.feeders.len()).sum()
     }
 
+    pub fn active_feeder_count(&self) -> usize {
+        self.dishes
+            .iter()
+            .flat_map(|d| d.feeders.iter())
+            .filter(|f| f.enabled)
+            .count()
+    }
+
+    pub fn mutate_organism(&mut self, id: u64) -> bool {
+        if let Some(o) = self.organisms.iter_mut().find(|o| o.id == id) {
+            o.mutate(&mut self.rng);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Project a world point onto the nearest dish rim. Returns (side, along, rim_pos, distance).
     pub fn project_rim(&self, p: Vec2) -> (u8, f32, Vec2, f32) {
         let dish = self.primary();
@@ -2418,6 +2435,26 @@ mod tests {
         // Delete feeder
         assert!(world.remove_feeder(0));
         assert_eq!(world.feeders().len(), 0);
+    }
+
+    #[test]
+    fn mutate_organism_and_feeder_count() {
+        let mut world = World::new_with(77, 2, 0);
+        assert_eq!(world.active_feeder_count(), 0);
+
+        world.add_feeder(Vec2::new(0.1, 0.1), FoodKind::Green);
+        assert_eq!(world.active_feeder_count(), 0);
+
+        world.set_feeder_enabled(0, true);
+        assert_eq!(world.active_feeder_count(), 1);
+
+        let id = world.organisms[0].id;
+        let orig_drift = world.organisms[0].genome.drift_from_root();
+        assert!(world.mutate_organism(id));
+        let new_drift = world.organisms[0].genome.drift_from_root();
+        assert!(new_drift >= orig_drift);
+        assert_eq!(world.organisms[0].nodes.len(), world.organisms[0].genome.morph.nodes as usize);
+        assert!(!world.mutate_organism(999_999));
     }
 }
 

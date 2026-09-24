@@ -13,8 +13,6 @@ const LOGO_FONT_PATH: &str = "/usr/share/fonts/opentype/fira/FiraSans-Heavy.otf"
 /// Bottom tool dock stays screen-fixed; dish chrome is in world units below.
 const TOOL: f32 = 84.0;
 
-const W_LIFE_BTN_W: f32 = 0.52;
-const W_LIFE_BTN_H: f32 = 0.11;
 const W_DISH_CORNER: f32 = 0.18;
 /// Shared flat chrome panel fill (header + census).
 const CHROME_FILL: Color = Color::new(0.02, 0.05, 0.07, 0.92);
@@ -168,7 +166,9 @@ pub async fn run() {
     let mut feed_tool = false;
     let mut dish_tool = false;
     let mut feed_kind = FoodKind::Green;
+    let mut feed_radius: f32 = 0.35;
     let mut selected_feeder: Option<usize> = None;
+    let mut feeder_quick_action: Option<FeederHoverAction> = None;
     let mut food_panel_open = false;
     let mut food_edit: u8 = 0;
     let mut life_setup_open = false;
@@ -177,9 +177,9 @@ pub async fn run() {
     let mut life_food: usize = 6;
     let mut life_hx: f32 = 1.0;
     let mut life_hy: f32 = 1.0;
-    let mut life_btn_hover = 0.0f32;
     let mut settings_open = false;
     let mut settings_section: u8 = 0;
+    let mut census_collapsed = false;
     let mut saves_open = false;
     let mut save_list: Vec<SaveMeta> = Vec::new();
     let mut save_name = String::new();
@@ -717,8 +717,9 @@ pub async fn run() {
         let on_saves_btn = hit_rect(mouse, bar.saves);
         let on_dish_settings = hit_rect(mouse, bar.settings);
         let (census_x, census_y, census_w, census_h) =
-            census_rect(&frame, &cam, chrome_center, chrome_hx, chrome_hy, true);
+            census_rect(&frame, &cam, chrome_center, chrome_hx, chrome_hy, !census_collapsed);
         let on_census = hit(mouse, census_x, census_y, census_w, census_h);
+        let on_census_header = hit(mouse, 20.0, 16.0, 46.0, 24.0);
         let life_ui = if life_setup_open {
             Some(life_setup_layout(&frame))
         } else {
@@ -727,22 +728,6 @@ pub async fn run() {
         let on_life_setup = life_ui
             .as_ref()
             .is_some_and(|u| hit_rect(mouse, u.panel));
-        let mut on_empty_life = false;
-        let mut empty_life_target: Option<u32> = None;
-        if !life_setup_open {
-            for dish in world.dishes() {
-                if !world.dish_is_empty(dish.id) {
-                    continue;
-                }
-                let rect =
-                    empty_life_button_rect(&frame, &cam, dish.pos, dish.half_x, dish.half_y);
-                if hit_rect(mouse, rect) {
-                    on_empty_life = true;
-                    empty_life_target = Some(dish.id);
-                    break;
-                }
-            }
-        }
         let speed_ui = speed_menu(
             &frame,
             &cam,
@@ -779,7 +764,6 @@ pub async fn run() {
             || on_dish_settings
             || on_census
             || on_speed
-            || on_empty_life
             || on_life_setup
             || hit_rect(mouse, bar.bar);
         let mut consumed = input_locked;
@@ -959,30 +943,7 @@ pub async fn run() {
             consumed = true;
         } else if pressed && settings_open && on_setup {
             audio.play(Sfx::Ui);
-            if hit_rect(mouse, setup.cat_obraz) {
-                settings_section = if settings_section == 1 { 0 } else { 1 };
-            } else if hit_rect(mouse, setup.cat_zvuk) {
-                settings_section = if settings_section == 2 { 0 } else { 2 };
-            } else if hit_rect(mouse, setup.cat_prostredi) {
-                settings_section = if settings_section == 3 { 0 } else { 3 };
-            } else if hit_rect(mouse, setup.fullscreen) {
-                fullscreen = !fullscreen;
-                set_fullscreen(fullscreen);
-            } else if hit_rect(mouse, setup.bloom) {
-                bloom_on = !bloom_on;
-            } else if hit_rect(mouse, setup.master_minus) {
-                audio.nudge_master(-0.05);
-            } else if hit_rect(mouse, setup.master_plus) {
-                audio.nudge_master(0.05);
-            } else if hit_rect(mouse, setup.music_minus) {
-                audio.nudge_music(-0.05);
-            } else if hit_rect(mouse, setup.music_plus) {
-                audio.nudge_music(0.05);
-            } else if hit_rect(mouse, setup.sfx_minus) {
-                audio.nudge_sfx(-0.05);
-            } else if hit_rect(mouse, setup.sfx_plus) {
-                audio.nudge_sfx(0.05);
-            } else if hit_rect(mouse, setup.viscosity_minus) {
+            if hit_rect(mouse, setup.viscosity_minus) {
                 world.set_viscosity(world.viscosity() - 0.1);
             } else if hit_rect(mouse, setup.viscosity_plus) {
                 world.set_viscosity(world.viscosity() + 0.1);
@@ -1076,6 +1037,34 @@ pub async fn run() {
             selected_feeder = None;
             consumed = true;
         }
+
+        if pressed && !consumed {
+            if let Some(act) = feeder_quick_action.take() {
+                match act {
+                    FeederHoverAction::Toggle(idx) => {
+                        let on = world.feeders().get(idx).map(|f| !f.enabled).unwrap_or(true);
+                        world.set_feeder_enabled(idx, on);
+                        audio.play(Sfx::Ui);
+                    }
+                    FeederHoverAction::RateMinus(idx) => {
+                        if let Some(f) = world.feeders().get(idx) {
+                            let step = if f.rate > 1.05 { 0.5 } else { 0.1 };
+                            world.set_feeder_rate(idx, (f.rate - step).max(0.1));
+                            audio.play(Sfx::Ui);
+                        }
+                    }
+                    FeederHoverAction::RatePlus(idx) => {
+                        if let Some(f) = world.feeders().get(idx) {
+                            let step = if f.rate >= 1.0 { 0.5 } else { 0.1 };
+                            world.set_feeder_rate(idx, (f.rate + step).min(10.0));
+                            audio.play(Sfx::Ui);
+                        }
+                    }
+                }
+                consumed = true;
+            }
+        }
+
         if pressed && !consumed {
             if let Some(h) = detail_hits.as_ref() {
                 if hit_rect(mouse, h.info) {
@@ -1143,19 +1132,10 @@ pub async fn run() {
             saves_open = false;
             save_name_focus = false;
             consumed = true;
-        } else if pressed && on_empty_life && !consumed {
-            if let Some(id) = empty_life_target {
-                life_setup_dish = Some(id);
-                life_setup_open = true;
-                if let Some(d) = world.dishes().iter().find(|d| d.id == id) {
-                    life_hx = d.half_x;
-                    life_hy = d.half_y;
-                }
-                life_pop = 8;
-                life_food = 6;
-                audio.play(Sfx::Ui);
-                consumed = true;
-            }
+        } else if pressed && on_census_header && !consumed {
+            census_collapsed = !census_collapsed;
+            audio.play(Sfx::Ui);
+            consumed = true;
         } else if pressed && life_setup_open && !consumed {
             if let Some(ui) = life_ui.as_ref() {
                 if hit_rect(mouse, ui.close) {
@@ -1345,6 +1325,7 @@ pub async fn run() {
                                 audio.play(Sfx::Ui);
                             } else {
                                 let idx = world.add_feeder(p, feed_kind);
+                                world.set_feeder_radius(idx, feed_radius);
                                 selected_feeder = Some(idx);
                                 food_panel_open = true;
                                 feed_tool = false;
@@ -1358,8 +1339,14 @@ pub async fn run() {
                             food_panel_open = true;
                             pinned = None;
                             audio.play(Sfx::Ui);
+                        } else if let Some(org_id) = world.pick(p) {
+                            world.mutate_organism(org_id);
+                            audio.play(Sfx::Ui);
+                            pinned = None;
+                            selected_feeder = None;
+                            food_panel_open = false;
                         } else {
-                            pinned = world.pick(p);
+                            pinned = None;
                             selected_feeder = None;
                             food_panel_open = false;
                         }
@@ -1414,7 +1401,6 @@ pub async fn run() {
             0.1,
         );
         tool_hovers.food = damp(tool_hovers.food, if on_food { 1.0 } else { 0.0 }, dt, 0.1);
-        life_btn_hover = damp(life_btn_hover, if on_empty_life { 1.0 } else { 0.0 }, dt, 0.12);
         tool_hovers.dish = damp(
             tool_hovers.dish,
             if on_dish || dish_tool { 1.0 } else { 0.0 },
@@ -1439,7 +1425,7 @@ pub async fn run() {
             0.1,
         );
 
-        // Wheel zoom — small steps + coast; kill coast that pushes past limits.
+        // Wheel handling: feeder radius adjustment when placing feeder, or camera zoom.
         let (_wx, wy) = mouse_wheel();
         if wy.abs() > 0.0
             && !ui_block
@@ -1449,24 +1435,29 @@ pub async fn run() {
             && !speed_open
             && !life_setup_open
         {
-            let steps = wy.clamp(-2.5, 2.5);
-            // Finer steps than before.
-            let factor = (1.0 + steps * 0.035).clamp(0.92, 1.09);
-            // Reverse scroll cuts existing coast so max-zoom doesn't trap you.
-            if steps.signum() != 0.0
-                && zoom_coast.signum() != 0.0
-                && steps.signum() != zoom_coast.signum()
-            {
-                zoom_coast *= 0.15;
-            }
-            zoom_coast += steps * 0.42;
-            zoom_coast = zoom_coast.clamp(-5.0, 5.0);
-            pan_coast = pan_coast * 0.92;
-            if pinned.is_some() {
-                inspect_zoom = (inspect_zoom * factor).clamp(0.08, 48.0);
-                home.zoom = inspect_zoom;
+            if feed_tool {
+                let step = if wy > 0.0 { 0.05 } else { -0.05 };
+                feed_radius = (feed_radius + step).clamp(0.10, 2.00);
             } else {
-                home.zoom = (home.zoom * factor).clamp(0.04, 48.0);
+                let steps = wy.clamp(-2.5, 2.5);
+                // Finer steps than before.
+                let factor = (1.0 + steps * 0.035).clamp(0.92, 1.09);
+                // Reverse scroll cuts existing coast so max-zoom doesn't trap you.
+                if steps.signum() != 0.0
+                    && zoom_coast.signum() != 0.0
+                    && steps.signum() != zoom_coast.signum()
+                {
+                    zoom_coast *= 0.15;
+                }
+                zoom_coast += steps * 0.42;
+                zoom_coast = zoom_coast.clamp(-5.0, 5.0);
+                pan_coast = pan_coast * 0.92;
+                if pinned.is_some() {
+                    inspect_zoom = (inspect_zoom * factor).clamp(0.08, 48.0);
+                    home.zoom = inspect_zoom;
+                } else {
+                    home.zoom = (home.zoom * factor).clamp(0.04, 48.0);
+                }
             }
         }
 
@@ -1581,14 +1572,17 @@ pub async fn run() {
             );
         }
         draw_edge_zones(&frame, &cam, hx, hy, world.edges());
-        draw_feeders(
+        feeder_quick_action = draw_feeders(
             &frame,
+            &font,
             &cam,
             &world,
             selected_feeder,
             feed_tool,
             feed_kind,
+            feed_radius,
             mouse,
+            on_food,
             on_tools || on_setup || on_food_panel || on_saves_panel || on_detail || on_net,
         );
 
@@ -1688,25 +1682,9 @@ pub async fn run() {
             chrome_hx,
             chrome_hy,
             true,
+            census_collapsed,
+            on_census_header,
         );
-        for dish in world.dishes() {
-            if world.dish_is_empty(dish.id) && !life_setup_open {
-                draw_empty_life_button(
-                    &frame,
-                    &font,
-                    &cam,
-                    dish.pos,
-                    dish.half_x,
-                    dish.half_y,
-                    mouse,
-                    if empty_life_target == Some(dish.id) {
-                        life_btn_hover
-                    } else {
-                        0.0
-                    },
-                );
-            }
-        }
         draw_spawn_button(&frame, &font, mouse, tool_hovers.spawn);
         if let Some(ui) = life_ui.as_ref() {
             draw_life_setup(
@@ -1741,6 +1719,7 @@ pub async fn run() {
             food_panel_open || feed_tool,
             feed_kind,
             tool_hovers.food,
+            world.feeder_count(),
         );
         if settings_open {
             draw_settings_menu(
@@ -2106,7 +2085,6 @@ fn paint_sense_sector(
 
 struct ControlBar {
     bar: (f32, f32, f32, f32),
-    mini_panel: (f32, f32, f32, f32),
     time_box: (f32, f32, f32, f32),
     settings: (f32, f32, f32, f32),
     pause: (f32, f32, f32, f32),
@@ -2178,31 +2156,31 @@ fn control_bar_layout(
     speed_open: bool,
 ) -> ControlBar {
     let y = 16.0;
-    let icon = 34.0;
-    let right_pad = 20.0;
-    let gap = 10.0;
+    let gap = 14.0;
+    let saves_w = 56.0;
+    let settings_w = 95.0;
+    let btn_h = 24.0;
 
-    // Tlačítka nahoře vpravo v rohu
-    let settings = (frame.sw - right_pad - icon, y, icon, icon);
-    let saves = (frame.sw - right_pad - icon * 2.0 - gap, y, icon, icon);
+    // Tlačítka nahoře vlevo vedle nápisu INFO (x = 20.0, w = 40.0)
+    let info_end_x = 20.0 + 40.0;
+    let saves_x = info_end_x + gap;
+    let settings_x = saves_x + saves_w + gap;
+    let saves = (saves_x, y, saves_w, btn_h);
+    let settings = (settings_x, y, settings_w, btn_h);
 
-    // Středový blok: Čas + Dělítko + Pauza + Rychlost (čistě plovoucí bez panelu)
+    // Středový blok: Pauza + Čas + Rychlost (čistě plovoucí bez panelu a bez dělítka)
     let cx = frame.sw * 0.5;
-    let ph = 38.0;
-    let time_w = 84.0;
-    let pause_w = 34.0;
+    let ph = 34.0;
+    let pause_w = 32.0;
+    let time_w = 80.0;
     let speed_w = 34.0;
-    let inner_gap = 14.0;
-    let sep_w = 1.0;
-    let pw = time_w + inner_gap + sep_w + inner_gap + pause_w + inner_gap + speed_w;
-    let px0 = cx - pw * 0.5;
-    let py0 = y;
-    let mini_panel = (px0, py0, pw, ph);
-
-    let time_box = (px0, py0, time_w, ph);
-    let pause_x = px0 + time_w + inner_gap + sep_w + inner_gap;
-    let pause = (pause_x, py0 + (ph - pause_w) * 0.5, pause_w, pause_w);
-    let speed = (pause_x + pause_w + inner_gap, py0 + (ph - speed_w) * 0.5, speed_w, speed_w);
+    let mid_gap = 12.0;
+    let total_w = pause_w + mid_gap + time_w + mid_gap + speed_w;
+    let x0 = cx - total_w * 0.5;
+    let pause = (x0, y + (ph - pause_w) * 0.5, pause_w, pause_w);
+    let time_box = (x0 + pause_w + mid_gap, y, time_w, ph);
+    let speed = (x0 + pause_w + mid_gap + time_w + mid_gap, y + (ph - speed_w) * 0.5, speed_w, speed_w);
+    let mini_panel = (x0, y, total_w, ph);
 
     let mut speed_options = [(0.0, 0.0, 0.0, 0.0); 9];
     if speed_open {
@@ -2211,14 +2189,13 @@ fn control_bar_layout(
         let og = 4.0;
         let total = 9.0 * ow + 8.0 * og;
         let x0 = cx - total * 0.5;
-        let oy = py0 + ph + 8.0;
+        let oy = y + ph + 8.0;
         for i in 0..9 {
             speed_options[i] = (x0 + i as f32 * (ow + og), oy, ow, oh);
         }
     }
     ControlBar {
         bar: mini_panel,
-        mini_panel,
         time_box,
         settings,
         pause,
@@ -2237,13 +2214,10 @@ fn census_rect(
     _half_y: f32,
     open: bool,
 ) -> (f32, f32, f32, f32) {
-    if !open {
-        return (0.0, 0.0, 0.0, 0.0);
-    }
     let x = 20.0;
     let y = 16.0;
     let w = 150.0;
-    let h = 260.0;
+    let h = if open { 260.0 } else { 24.0 };
     (x, y, w, h)
 }
 
@@ -2298,8 +2272,6 @@ fn speed_label(speed: u32) -> &'static str {
 }
 
 fn draw_center_mini_panel(font: &Option<Font>, sim_time: f32, bar: &ControlBar) {
-    let (_x, y, _w, h) = bar.mini_panel;
-
     // Formátovaný čas simulace (větší font: 20 px)
     let mins = (sim_time / 60.0).floor() as u32;
     let secs = (sim_time % 60.0).floor() as u32;
@@ -2311,10 +2283,6 @@ fn draw_center_mini_panel(font: &Option<Font>, sim_time: f32, bar: &ControlBar) 
     let (tx, ty, tw, th) = bar.time_box;
     let time_col = Color::new(0.72, 0.98, 0.94, 0.98);
     center_text_scaled(font, &time_str, tx + tw * 0.5, ty + th * 0.65, 20, 1.0, time_col);
-
-    // Vertikální dělítko mezi časem a tlačítky
-    let sep_x = tx + tw + 14.0;
-    draw_line(sep_x, y + 6.0, sep_x, y + h - 6.0, 1.2, Color::new(0.35, 0.65, 0.65, 0.45));
 }
 
 
@@ -2490,57 +2458,46 @@ fn draw_saves_button(
     open: bool,
     hover_t: f32,
 ) {
-    let _ = font;
     let (x, y, w, h) = bar.saves;
-    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    let u = w / 28.0;
-    let lit = outline.a > 0.05;
-    let stroke = if lit { (2.6 * u).max(1.6) } else { (1.8 * u).max(1.0) };
-    let arrow_col = if lit { outline } else { ink };
-
-    draw_line(cx, cy - 7.0 * u, cx, cy + 2.0 * u, stroke, arrow_col);
-    let p1 = macroquad::math::Vec2::new(cx - 5.0 * u, cy + 0.5 * u);
-    let p2 = macroquad::math::Vec2::new(cx + 5.0 * u, cy + 0.5 * u);
-    let p3 = macroquad::math::Vec2::new(cx, cy + 6.5 * u);
-    draw_triangle(p1, p2, p3, ink);
+    let hot = hit(mouse, x, y, w, h);
+    let t = smoother(hover_t.clamp(0.0, 1.0));
+    let lit = open || hot || t > 0.35;
+    let col = if lit {
+        Color::new(0.95, 1.0, 0.98, 1.0)
+    } else {
+        Color::new(0.40, 0.95, 0.85, 0.98)
+    };
     if lit {
-        draw_line(p1.x, p1.y, p2.x, p2.y, 1.5, outline);
-        draw_line(p2.x, p2.y, p3.x, p3.y, 1.5, outline);
-        draw_line(p3.x, p3.y, p1.x, p1.y, 1.5, outline);
+        for &(dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            center_text_scaled(font, "ULOŽIT", x + w * 0.5 + dx, y + h * 0.65 + dy, 15, 1.0, Color::new(0.2, 0.8, 0.7, 0.4));
+        }
     }
-    draw_line(cx - 7.0 * u, cy + 8.0 * u, cx + 7.0 * u, cy + 8.0 * u, stroke, arrow_col);
+    center_text_scaled(font, "ULOŽIT", x + w * 0.5, y + h * 0.65, 15, 1.0, col);
 }
 
 fn draw_dish_settings_button(
-    _font: &Option<Font>,
+    font: &Option<Font>,
     bar: &ControlBar,
     mouse: (f32, f32),
     open: bool,
     hover_t: f32,
 ) {
     let (x, y, w, h) = bar.settings;
-    let (_hot, cx, cy, ink, outline) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    let u = w / 28.0;
-    let lit = outline.a > 0.05;
-    let stroke = if lit { (2.2 * u).max(1.4) } else { (1.5 * u).max(1.0) };
-    let gear_col = if lit { outline } else { ink };
-
-    draw_circle_lines(cx, cy, 5.8 * u, stroke, gear_col);
-    draw_circle(cx, cy, 2.0 * u, gear_col);
-    for i in 0..8 {
-        let a = i as f32 / 8.0 * std::f32::consts::TAU;
-        draw_line(
-            cx + a.cos() * 6.5 * u,
-            cy + a.sin() * 6.5 * u,
-            cx + a.cos() * 9.8 * u,
-            cy + a.sin() * 9.8 * u,
-            stroke,
-            gear_col,
-        );
+    let hot = hit(mouse, x, y, w, h);
+    let t = smoother(hover_t.clamp(0.0, 1.0));
+    let lit = open || hot || t > 0.35;
+    let col = if lit {
+        Color::new(0.95, 1.0, 0.98, 1.0)
+    } else {
+        Color::new(0.40, 0.95, 0.85, 0.98)
+    };
+    if lit {
+        for &(dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            center_text_scaled(font, "NASTAVENÍ", x + w * 0.5 + dx, y + h * 0.65 + dy, 15, 1.0, Color::new(0.2, 0.8, 0.7, 0.4));
+        }
     }
+    center_text_scaled(font, "NASTAVENÍ", x + w * 0.5, y + h * 0.65, 15, 1.0, col);
 }
-
-
 
 const BASE_CHROME_TITLE_FS: u16 = 15;
 const BASE_CHROME_ROW_FS: u16 = 11;
@@ -2554,42 +2511,55 @@ fn draw_census(
     half_x: f32,
     half_y: f32,
     open: bool,
+    collapsed: bool,
+    hot_header: bool,
 ) {
     if !open {
         return;
     }
-    let c = world.census();
-    let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, true);
+    let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, !collapsed);
     let title_scale = 1.0;
+    let gold = if hot_header {
+        Color::new(0.95, 1.0, 0.98, 1.0)
+    } else {
+        Color::new(0.40, 0.95, 0.85, 0.98)
+    };
+    let mut yy = y + BASE_CHROME_TITLE_FS as f32 * title_scale;
+    let header_label = "INFO";
+    if hot_header {
+        for &(dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0)] {
+            text_scaled(font, header_label, x + dx, yy + dy, BASE_CHROME_TITLE_FS, title_scale, Color::new(0.2, 0.8, 0.7, 0.4));
+        }
+    }
+    text_scaled(font, header_label, x, yy, BASE_CHROME_TITLE_FS, title_scale, gold);
+
+    if collapsed {
+        return;
+    }
+
+    let c = world.census();
     let row_scale = 1.0;
     let row_h = 16.0;
-    let lines: [(&str, String, bool); 14] = [
-        ("EKOSYSTÉM", String::new(), true),
-        ("organismy", format!("{}", c.alive), false),
-        ("jídlo", format!("{}", c.food), false),
-        ("krmítka", format!("{}", c.feeders), false),
-        ("hladoví", format!("{}", c.hungry), false),
-        ("generace", format!("{}", c.max_generation), false),
-        ("narození", format!("{}", c.births), false),
-        ("úmrtí", format!("{}", c.deaths), false),
-        ("Ø energie", format!("{:.2}", c.mean_energy), false),
-        ("Ø hlad", format!("{:.2}", c.mean_hunger), false),
-        ("Ø věk", format!("{:.0} s", c.mean_age), false),
-        ("Ø hmota", format!("{:.2}", c.mean_mass), false),
-        ("Ø neurony", format!("{:.0}", c.mean_neurons), false),
-        ("Ø synapse", format!("{:.0}", c.mean_synapses), false),
+    let lines: [(&str, String); 13] = [
+        ("organismy", format!("{}", c.alive)),
+        ("jídlo", format!("{}", c.food)),
+        ("krmítka", format!("{}", c.feeders)),
+        ("hladoví", format!("{}", c.hungry)),
+        ("generace", format!("{}", c.max_generation)),
+        ("narození", format!("{}", c.births)),
+        ("úmrtí", format!("{}", c.deaths)),
+        ("Ø energie", format!("{:.2}", c.mean_energy)),
+        ("Ø hlad", format!("{:.2}", c.mean_hunger)),
+        ("Ø věk", format!("{:.0} s", c.mean_age)),
+        ("Ø hmota", format!("{:.2}", c.mean_mass)),
+        ("Ø neurony", format!("{:.0}", c.mean_neurons)),
+        ("Ø synapse", format!("{:.0}", c.mean_synapses)),
     ];
     let ink = Color::new(0.9, 0.96, 0.97, 0.95);
     let dim = Color::new(0.62, 0.8, 0.84, 0.85);
-    let gold = Color::new(0.40, 0.95, 0.85, 0.98);
-    let mut yy = y + BASE_CHROME_TITLE_FS as f32 * title_scale;
+    yy += row_h * 1.15;
     let value_x = x + 76.0;
-    for (i, (label, value, header)) in lines.iter().enumerate() {
-        if *header {
-            text_scaled(font, label, x, yy, BASE_CHROME_TITLE_FS, title_scale, gold);
-            yy += row_h * 1.15;
-            continue;
-        }
+    for (i, (label, value)) in lines.iter().enumerate() {
         text_scaled(font, label, x, yy, BASE_CHROME_ROW_FS, row_scale, dim);
         text_scaled(
             font,
@@ -2598,7 +2568,7 @@ fn draw_census(
             yy,
             BASE_CHROME_ROW_FS,
             row_scale,
-            if i == 2 { ink } else { dim },
+            if i == 1 { ink } else { dim },
         );
         yy += row_h;
     }
@@ -2620,21 +2590,6 @@ struct LifeSetupUi {
     height_plus: (f32, f32, f32, f32),
     start: (f32, f32, f32, f32),
     close: (f32, f32, f32, f32),
-}
-
-fn empty_life_button_rect(
-    frame: &Frame,
-    cam: &Cam,
-    center: Vec2,
-    half_x: f32,
-    half_y: f32,
-) -> (f32, f32, f32, f32) {
-    let (dx, dy, dw, dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
-    let s = world_scale(frame, cam).max(1e-3);
-    // Pure world units — scales with camera zoom (no pixel floor).
-    let bw = px(W_LIFE_BTN_W, s);
-    let bh = px(W_LIFE_BTN_H, s);
-    (dx + (dw - bw) * 0.5, dy + (dh - bh) * 0.5, bw, bh)
 }
 
 fn life_setup_layout(frame: &Frame) -> LifeSetupUi {
@@ -2671,53 +2626,6 @@ fn life_setup_layout(frame: &Frame) -> LifeSetupUi {
         start,
         close: (x + w - 36.0, y + 10.0, 26.0, 26.0),
     }
-}
-
-fn draw_empty_life_button(
-    frame: &Frame,
-    font: &Option<Font>,
-    cam: &Cam,
-    center: Vec2,
-    half_x: f32,
-    half_y: f32,
-    mouse: (f32, f32),
-    hover_t: f32,
-) -> (f32, f32, f32, f32) {
-    let rect = empty_life_button_rect(frame, cam, center, half_x, half_y);
-    let (x, y, w, h) = rect;
-    let s = world_scale(frame, cam).max(1e-3);
-    let hot = hit_rect(mouse, rect);
-    let t = smoother(hover_t.max(if hot { 1.0 } else { 0.0 }).clamp(0.0, 1.0));
-    let r = h * 0.45;
-    let stroke = (px(0.004, s)).max(1.0);
-    fill_round_rect(
-        x,
-        y,
-        w,
-        h,
-        r,
-        Color::new(0.04 + 0.04 * t, 0.1 + 0.08 * t, 0.12 + 0.06 * t, 0.88),
-    );
-    stroke_round_rect(
-        x,
-        y,
-        w,
-        h,
-        r,
-        stroke,
-        Color::new(0.4 + 0.3 * t, 0.95, 0.88, 0.55 + 0.35 * t),
-    );
-    let btn_scale = (px(0.045, s) / 16.0).clamp(0.6, 2.2);
-    center_text_scaled(
-        font,
-        "Nový život",
-        x + w * 0.5,
-        y + h * 0.68,
-        16,
-        btn_scale,
-        Color::new(0.82 + 0.15 * t, 0.98, 0.94, 1.0),
-    );
-    rect
 }
 
 fn draw_life_setup(
@@ -3308,53 +3216,187 @@ fn paint_mote(gfx: Option<&Gfx>, frame: &Frame, cam: &Cam, mote: &Mote) {
 }
 
 
+#[derive(Clone, Copy, Debug)]
+enum FeederHoverAction {
+    Toggle(usize),
+    RateMinus(usize),
+    RatePlus(usize),
+}
+
 fn draw_feeders(
     frame: &Frame,
+    font: &Option<Font>,
     cam: &Cam,
     world: &World,
     selected: Option<usize>,
     feed_tool: bool,
     feed_kind: FoodKind,
+    feed_radius: f32,
     mouse: (f32, f32),
+    hover_all: bool,
     ui_block: bool,
-) {
+) -> Option<FeederHoverAction> {
     let scale = world_scale(frame, cam);
+    let time = world.time();
+    let mut clicked_action = None;
+
     for (i, feeder) in world.feeders().iter().enumerate() {
         let pos = feeder.pos;
         let (sx, sy) = world_to_screen(frame, cam, pos);
         let spec = world.food_spec(feeder.kind);
         let (cr, cg, cb) = spec.color;
-        let lit = selected == Some(i);
+        let is_selected = selected == Some(i);
 
-        // Draw dispersion area circle when selected
+        let box_size = if is_selected || hover_all { 24.0 } else { 21.0 };
+        let half_b = box_size * 0.5;
+        let bx = sx - half_b;
+        let by = sy - half_b;
+
+        // Hover test for the feeder node and its immediate quick-control area
+        let node_hover = !ui_block
+            && mouse.0 >= sx - 45.0
+            && mouse.0 <= sx + 45.0
+            && mouse.1 >= sy - 20.0
+            && mouse.1 <= sy + 42.0;
+
+        let lit = is_selected || hover_all || node_hover;
+
+        // Draw dispersion area circle when selected or when hovering the feeder button
         if lit {
             let pixel_radius = feeder.radius * scale;
-            draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.07));
-            draw_circle_lines(sx, sy, pixel_radius, 1.4, Color::new(cr, cg, cb, 0.55));
+            let alpha = if is_selected { 0.08 } else { 0.05 };
+            let line_a = if is_selected { 0.65 } else { 0.40 };
+            draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, alpha));
+            draw_circle_lines(sx, sy, pixel_radius, 1.4, Color::new(cr, cg, cb, line_a));
         }
 
-        // Feeder dispenser capsule / node
-        let a = if feeder.enabled { 0.95 } else { 0.40 };
-        let r = if lit { 11.0 } else { 9.0 };
-        draw_circle(sx, sy, r + 4.0, Color::new(cr, cg, cb, 0.18 * a));
-        draw_circle(sx, sy, r, Color::new(0.08, 0.12, 0.16, 0.92));
-        draw_circle_lines(
-            sx,
-            sy,
-            r,
-            1.8,
-            Color::new(cr, cg, cb, if lit { 1.0 } else { 0.7 } * a),
+        // Feeder dispenser: rounded square node (approx 22x22 px)
+        let a = if feeder.enabled { 0.98 } else { 0.45 };
+
+        // Glow behind node
+        if feeder.enabled || lit {
+            fill_round_rect(
+                bx - 3.0,
+                by - 3.0,
+                box_size + 6.0,
+                box_size + 6.0,
+                7.0,
+                Color::new(cr, cg, cb, 0.18 * a),
+            );
+        }
+
+        // Rounded box background & border
+        fill_round_rect(
+            bx,
+            by,
+            box_size,
+            box_size,
+            5.0,
+            Color::new(0.04, 0.03, 0.08, 0.94),
         );
-        // Core indicator
+        let border_col = if lit {
+            Color::new((cr * 0.3 + 0.7).min(1.0), (cg * 0.3 + 0.7).min(1.0), (cb * 0.3 + 0.7).min(1.0), 1.0)
+        } else {
+            Color::new(cr, cg, cb, 0.75 * a)
+        };
+        stroke_round_rect(bx, by, box_size, box_size, 5.0, if lit { 1.8 } else { 1.3 }, border_col);
+
+        // Food icon inside the rounded square
+        let food_rad = (box_size * 0.24).max(3.0);
+        draw_circle(sx, sy, food_rad, Color::new(cr, cg, cb, if feeder.enabled { 0.95 } else { 0.40 }));
         draw_circle(
-            sx,
-            sy,
-            r * 0.45,
-            Color::new(cr, cg, cb, if feeder.enabled { 0.95 } else { 0.35 }),
+            sx - food_rad * 0.3,
+            sy - food_rad * 0.3,
+            food_rad * 0.35,
+            Color::new(1.0, 1.0, 1.0, if feeder.enabled { 0.85 } else { 0.30 }),
         );
+
+        // Subtle activity pulse ring when enabled
         if feeder.enabled {
-            let pulse = ((world.time() * 3.5).sin() * 0.5 + 0.5) * 2.5;
-            draw_circle_lines(sx, sy, r + 1.0 + pulse, 1.0, Color::new(cr, cg, cb, 0.6));
+            let pulse = ((time * 3.5).sin() * 0.5 + 0.5) * 3.0;
+            draw_circle_lines(sx, sy, half_b + 1.0 + pulse, 1.0, Color::new(cr, cg, cb, 0.45));
+        }
+
+        // On hover or selection: show quick toggle (ZAP/VYP) and rate controls (-/+)
+        if node_hover || is_selected {
+            let bar_y = sy + half_b + 7.0;
+            let bar_h = 20.0;
+
+            // 1. Toggle switch (ZAP / VYP)
+            let tog_w = 34.0;
+            let tog_x = sx - 44.0;
+            let tog_rect = (tog_x, bar_y, tog_w, bar_h);
+            let tog_hot = hit_rect(mouse, tog_rect);
+            let (tog_label, tog_col) = if feeder.enabled {
+                ("ZAP", Color::new(0.35, 0.95, 0.85, 0.95))
+            } else {
+                ("VYP", Color::new(0.60, 0.68, 0.75, 0.75))
+            };
+            fill_round_rect(tog_x, bar_y, tog_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
+            stroke_round_rect(
+                tog_x,
+                bar_y,
+                tog_w,
+                bar_h,
+                4.0,
+                1.1,
+                if tog_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { tog_col },
+            );
+            center_text(font, tog_label, tog_x + tog_w * 0.5, bar_y + 14.0, 10, tog_col);
+            if tog_hot && is_mouse_button_pressed(MouseButton::Left) {
+                clicked_action = Some(FeederHoverAction::Toggle(i));
+            }
+
+            // 2. Stepper minus (-)
+            let btn_w = 18.0;
+            let minus_x = sx - 6.0;
+            let minus_rect = (minus_x, bar_y, btn_w, bar_h);
+            let minus_hot = hit_rect(mouse, minus_rect);
+            fill_round_rect(minus_x, bar_y, btn_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
+            stroke_round_rect(
+                minus_x,
+                bar_y,
+                btn_w,
+                bar_h,
+                4.0,
+                1.0,
+                if minus_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { Color::new(0.40, 0.55, 0.65, 0.75) },
+            );
+            center_text(font, "−", minus_x + btn_w * 0.5, bar_y + 14.0, 11, Color::new(0.85, 0.92, 0.98, 0.90));
+            if minus_hot && is_mouse_button_pressed(MouseButton::Left) {
+                clicked_action = Some(FeederHoverAction::RateMinus(i));
+            }
+
+            // 3. Current rate value label
+            let val_x = sx + 14.0;
+            let val_w = 28.0;
+            center_text(
+                font,
+                &format!("{:.1}/s", feeder.rate),
+                val_x + val_w * 0.5,
+                bar_y + 14.0,
+                10,
+                Color::new(0.85, 0.95, 0.95, 0.95),
+            );
+
+            // 4. Stepper plus (+)
+            let plus_x = val_x + val_w + 2.0;
+            let plus_rect = (plus_x, bar_y, btn_w, bar_h);
+            let plus_hot = hit_rect(mouse, plus_rect);
+            fill_round_rect(plus_x, bar_y, btn_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
+            stroke_round_rect(
+                plus_x,
+                bar_y,
+                btn_w,
+                bar_h,
+                4.0,
+                1.0,
+                if plus_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { Color::new(0.40, 0.55, 0.65, 0.75) },
+            );
+            center_text(font, "+", plus_x + btn_w * 0.5, bar_y + 14.0, 11, Color::new(0.85, 0.92, 0.98, 0.90));
+            if plus_hot && is_mouse_button_pressed(MouseButton::Left) {
+                clicked_action = Some(FeederHoverAction::RatePlus(i));
+            }
         }
     }
 
@@ -3363,14 +3405,29 @@ fn draw_feeders(
         let (sx, sy) = (mouse.0, mouse.1);
         let spec = world.food_spec(feed_kind);
         let (cr, cg, cb) = spec.color;
-        let radius = 0.35;
-        let pixel_radius = radius * scale;
-        draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.06));
-        draw_circle_lines(sx, sy, pixel_radius, 1.2, Color::new(cr, cg, cb, 0.40));
-        draw_circle(sx, sy, 10.0, Color::new(0.08, 0.12, 0.16, 0.85));
-        draw_circle_lines(sx, sy, 10.0, 1.8, Color::new(cr, cg, cb, 0.80));
-        draw_circle(sx, sy, 4.5, Color::new(cr, cg, cb, 0.85));
+        let pixel_radius = feed_radius * scale;
+        draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.08));
+        draw_circle_lines(sx, sy, pixel_radius, 1.3, Color::new(cr, cg, cb, 0.55));
+
+        // Ghost box
+        let box_size = 22.0;
+        let half_b = box_size * 0.5;
+        let bx = sx - half_b;
+        let by = sy - half_b;
+        fill_round_rect(bx, by, box_size, box_size, 5.0, Color::new(0.04, 0.03, 0.08, 0.88));
+        stroke_round_rect(bx, by, box_size, box_size, 5.0, 1.6, Color::new(cr, cg, cb, 0.85));
+        draw_circle(sx, sy, 4.5, Color::new(cr, cg, cb, 0.90));
+        draw_circle(sx - 1.2, sy - 1.2, 1.5, Color::new(1.0, 1.0, 1.0, 0.85));
+
+        let kind_str = match feed_kind {
+            FoodKind::Green => "Zelené",
+            FoodKind::Amber => "Jantar",
+            FoodKind::Toxic => "Jed",
+        };
+        center_text(font, kind_str, sx, sy + half_b + 12.0, 10, Color::new(0.85, 0.92, 0.98, 0.85));
     }
+
+    clicked_action
 }
 
 fn draw_logo_dna(
@@ -3600,31 +3657,61 @@ fn draw_food_button(
     active: bool,
     kind: FoodKind,
     hover_t: f32,
+    active_count: usize,
 ) {
     let (x, y, w, h) = food_button_rect(frame);
     let (cr, cg, cb) = FoodSpec::defaults()[kind.index()].color;
     let (hot, cx, cy) = paint_round_tool(x, y, w, h, mouse, active, (cr, cg, cb), true, hover_t);
     let lit = active || hot || hover_t > 0.4;
-    let blob = if lit {
+
+    // Clean food icon: central glowing nourishment pellet with soft aura
+    let food_color = if lit {
         Color::new(cr, cg, cb, 1.0)
     } else {
-        Color::new(cr * 0.7, cg * 0.7, cb * 0.7, 0.95)
+        Color::new(cr * 0.82, cg * 0.82, cb * 0.82, 0.95)
     };
-    let leaf = if lit {
-        Color::new((cr + 0.2).min(1.0), (cg + 0.15).min(1.0), (cb + 0.1).min(1.0), 1.0)
+    let core_highlight = if lit {
+        Color::new((cr * 0.4 + 0.6).min(1.0), (cg * 0.4 + 0.6).min(1.0), (cb * 0.4 + 0.6).min(1.0), 1.0)
     } else {
-        Color::new(cr * 0.85, cg * 0.85, cb * 0.85, 0.95)
+        Color::new((cr * 0.3 + 0.5).min(1.0), (cg * 0.3 + 0.5).min(1.0), (cb * 0.3 + 0.5).min(1.0), 0.90)
     };
-    draw_circle(cx - 8.0, cy + 4.0, 14.0, blob);
-    draw_circle(cx + 10.0, cy + 2.0, 11.0, blob);
-    draw_circle(cx + 1.0, cy - 12.0, 9.0, leaf);
-    draw_circle(cx - 12.0, cy - 2.0, 3.0, Color::new(0.9, 1.0, 0.85, 0.55));
+
+    // Soft aura
+    draw_circle(cx, cy, 18.0, Color::new(cr, cg, cb, if lit { 0.16 } else { 0.08 }));
+    // Food particle / pellet
+    draw_circle(cx, cy, 12.0, food_color);
+    draw_circle(cx - 3.0, cy - 3.0, 4.2, core_highlight);
+    draw_circle(cx - 4.5, cy - 4.5, 1.8, Color::new(1.0, 1.0, 1.0, 0.85));
+
     if lit {
-        let outline = Color::new(1.0, 1.0, 1.0, 0.88);
-        draw_circle_lines(cx - 8.0, cy + 4.0, 14.0, 1.8, outline);
-        draw_circle_lines(cx + 10.0, cy + 2.0, 11.0, 1.8, outline);
-        draw_circle_lines(cx + 1.0, cy - 12.0, 9.0, 1.8, outline);
+        draw_circle_lines(cx, cy, 12.0, 1.8, Color::new(1.0, 1.0, 1.0, 0.90));
     }
+
+    // Badge showing number of active feeders in top-right corner of tool button
+    let badge_x = cx + 15.0;
+    let badge_y = cy - 13.0;
+    let badge_r = 9.0;
+    let has_active = active_count > 0;
+    let badge_bg = if has_active {
+        Color::new(0.08, 0.45, 0.42, 0.95)
+    } else {
+        Color::new(0.06, 0.08, 0.12, 0.90)
+    };
+    let badge_border = if has_active {
+        Color::new(0.35, 0.95, 0.85, 0.95)
+    } else {
+        Color::new(0.30, 0.42, 0.50, 0.65)
+    };
+    let badge_text_col = if has_active {
+        Color::new(1.0, 1.0, 1.0, 1.0)
+    } else {
+        Color::new(0.65, 0.75, 0.82, 0.75)
+    };
+
+    draw_circle(badge_x, badge_y, badge_r, badge_bg);
+    draw_circle_lines(badge_x, badge_y, badge_r, 1.2, badge_border);
+    center_text(font, &format!("{}", active_count), badge_x, badge_y + 4.0, 10, badge_text_col);
+
     tool_label(font, "Krmítko", x, y, w, h, lit);
 }
 
@@ -6229,20 +6316,7 @@ fn draw_text_action(
 
 struct SettingsMenu {
     panel: (f32, f32, f32, f32),
-    cat_obraz: (f32, f32, f32, f32),
-    cat_zvuk: (f32, f32, f32, f32),
     cat_prostredi: (f32, f32, f32, f32),
-    fullscreen: (f32, f32, f32, f32),
-    bloom: (f32, f32, f32, f32),
-    master_minus: (f32, f32, f32, f32),
-    master_value: (f32, f32, f32, f32),
-    master_plus: (f32, f32, f32, f32),
-    music_minus: (f32, f32, f32, f32),
-    music_value: (f32, f32, f32, f32),
-    music_plus: (f32, f32, f32, f32),
-    sfx_minus: (f32, f32, f32, f32),
-    sfx_value: (f32, f32, f32, f32),
-    sfx_plus: (f32, f32, f32, f32),
     viscosity_minus: (f32, f32, f32, f32),
     viscosity_plus: (f32, f32, f32, f32),
     viscosity_value: (f32, f32, f32, f32),
@@ -6290,56 +6364,15 @@ fn settings_menu(
     frame: &Frame,
     anchor: (f32, f32, f32, f32),
     open: bool,
-    section: u8,
+    _section: u8,
 ) -> SettingsMenu {
     let (gx, gy, gw, gh) = anchor;
-    let w = 300.0;
+    let w = 280.0;
     let x = (gx + gw * 0.5 - w * 0.5).clamp(8.0, frame.sw - w - 8.0);
-    let row = 32.0;
+    let row = 28.0;
     let z = (0.0, 0.0, 0.0, 0.0);
 
     let mut y = 10.0;
-    let cat_obraz = (x + 10.0, y, w - 20.0, row);
-    y += row + 4.0;
-    let mut fullscreen = z;
-    let mut bloom = z;
-    if open && section == 1 {
-        fullscreen = (x + 10.0, y, w - 20.0, row);
-        y += row + 4.0;
-        bloom = (x + 10.0, y, w - 20.0, row);
-        y += row + 6.0;
-    }
-    let cat_zvuk = (x + 10.0, y, w - 20.0, row);
-    y += row + 4.0;
-    let mut master_minus = z;
-    let mut master_value = z;
-    let mut master_plus = z;
-    let mut music_minus = z;
-    let mut music_value = z;
-    let mut music_plus = z;
-    let mut sfx_minus = z;
-    let mut sfx_value = z;
-    let mut sfx_plus = z;
-    if open && section == 2 {
-        y += 14.0;
-        let [a, b, c] = stepper_row(x + 10.0, y, w - 20.0, 28.0);
-        master_minus = a;
-        master_value = b;
-        master_plus = c;
-        y += 36.0;
-        y += 14.0;
-        let [a, b, c] = stepper_row(x + 10.0, y, w - 20.0, 28.0);
-        music_minus = a;
-        music_value = b;
-        music_plus = c;
-        y += 36.0;
-        y += 14.0;
-        let [a, b, c] = stepper_row(x + 10.0, y, w - 20.0, 28.0);
-        sfx_minus = a;
-        sfx_value = b;
-        sfx_plus = c;
-        y += 36.0;
-    }
     let cat_prostredi = (x + 10.0, y, w - 20.0, row);
     y += row + 4.0;
     let mut viscosity_minus = z;
@@ -6349,28 +6382,29 @@ fn settings_menu(
     let mut edge_reach_minus = [z; 4];
     let mut edge_reach_value = [z; 4];
     let mut edge_reach_plus = [z; 4];
-    if open && section == 3 {
-        y += 14.0;
-        let [vm, vv, vp] = stepper_row(x + 10.0, y, w - 20.0, 28.0);
+
+    if open {
+        y += 10.0;
+        let [vm, vv, vp] = stepper_row(x + 10.0, y, w - 20.0, 26.0);
         viscosity_minus = vm;
         viscosity_value = vv;
         viscosity_plus = vp;
-        y += 36.0;
-        y += 14.0;
+        y += 34.0;
+        y += 12.0;
         for i in 0..4 {
             let effect_w = (w - 20.0) * 0.42;
-            edge_effect[i] = (x + 10.0, y, effect_w, 28.0);
+            edge_effect[i] = (x + 10.0, y, effect_w, 26.0);
             let rx = x + 10.0 + effect_w + 8.0;
             let rw = w - 20.0 - effect_w - 8.0;
-            let [rm, rv, rp] = stepper_row(rx, y, rw, 28.0);
+            let [rm, rv, rp] = stepper_row(rx, y, rw, 26.0);
             edge_reach_minus[i] = rm;
             edge_reach_value[i] = rv;
             edge_reach_plus[i] = rp;
-            y += 34.0;
+            y += 32.0;
         }
     }
     let content_h = if open {
-        (y + 10.0).max(row * 3.0 + 24.0)
+        y + 10.0
     } else {
         0.0
     };
@@ -6388,24 +6422,11 @@ fn settings_menu(
             shift(arr[1]),
             shift(arr[2]),
             shift(arr[3]),
-        ]
+            ]
     };
     SettingsMenu {
         panel: (x, y0, w, content_h),
-        cat_obraz: shift(cat_obraz),
-        cat_zvuk: shift(cat_zvuk),
         cat_prostredi: shift(cat_prostredi),
-        fullscreen: shift(fullscreen),
-        bloom: shift(bloom),
-        master_minus: shift(master_minus),
-        master_value: shift(master_value),
-        master_plus: shift(master_plus),
-        music_minus: shift(music_minus),
-        music_value: shift(music_value),
-        music_plus: shift(music_plus),
-        sfx_minus: shift(sfx_minus),
-        sfx_value: shift(sfx_value),
-        sfx_plus: shift(sfx_plus),
         viscosity_minus: shift(viscosity_minus),
         viscosity_plus: shift(viscosity_plus),
         viscosity_value: shift(viscosity_value),
@@ -6526,144 +6547,62 @@ fn food_panel(frame: &Frame, anchor: Option<(f32, f32)>, open: bool) -> FoodPane
 }
 
 
+fn draw_settings_stepper_line(
+    font: &Option<Font>,
+    title: &str,
+    minus: (f32, f32, f32, f32),
+    value: (f32, f32, f32, f32),
+    plus: (f32, f32, f32, f32),
+    value_str: &str,
+    mouse: (f32, f32),
+) {
+    let dim = Color::new(0.65, 0.82, 0.86, 0.88);
+    text(font, title, minus.0 + 8.0, minus.1 - 3.0, 11, dim);
+    draw_chip(font, minus, "−", false, mouse);
+    draw_chip(font, value, value_str, true, mouse);
+    draw_chip(font, plus, "+", false, mouse);
+}
+
 fn draw_settings_menu(
     frame: &Frame,
     font: &Option<Font>,
     mouse: (f32, f32),
     ui: &SettingsMenu,
-    section: u8,
-    fullscreen: bool,
-    bloom_on: bool,
-    mix: Mix,
+    _section: u8,
+    _fullscreen: bool,
+    _bloom_on: bool,
+    _mix: Mix,
     viscosity: f32,
     edges: [EdgeZone; 4],
 ) {
     let _ = frame;
-    let (x, y, w, h) = ui.panel;
+    let (_x, _y, _w, h) = ui.panel;
     if h < 8.0 {
         return;
     }
-    draw_rectangle(x, y, w, h, Color::new(0.03, 0.05, 0.08, 0.92));
-    draw_rectangle(x, y, w, 1.0, Color::new(0.28, 0.9, 0.82, 0.35));
-    let dim = Color::new(0.55, 0.7, 0.76, 0.9);
-    let mark = |open: bool| if open { "▾ " } else { "▸ " };
-    draw_chip(
-        font,
-        ui.cat_obraz,
-        &format!("{}Obraz", mark(section == 1)),
-        section == 1,
-        mouse,
-    );
-    if section == 1 && ui.fullscreen.2 > 0.0 {
-        draw_chip(
-            font,
-            ui.fullscreen,
-            if fullscreen {
-                "Celá obrazovka zapnutá"
-            } else {
-                "Celá obrazovka"
-            },
-            fullscreen,
-            mouse,
-        );
-        draw_chip(
-            font,
-            ui.bloom,
-            if bloom_on {
-                "Bloom / shadery zapnuté"
-            } else {
-                "Bloom / shadery"
-            },
-            bloom_on,
-            mouse,
-        );
-    }
-    draw_chip(
-        font,
-        ui.cat_zvuk,
-        &format!("{}Zvuk", mark(section == 2)),
-        section == 2,
-        mouse,
-    );
-    if section == 2 && ui.master_minus.2 > 0.0 {
-        text(
-            font,
-            "hlasitost",
-            ui.master_minus.0,
-            ui.master_minus.1 - 2.0,
-            11,
-            dim,
-        );
-        draw_stepper(
-            font,
-            ui.master_minus,
-            ui.master_value,
-            ui.master_plus,
-            &format!("{:.0}%", mix.master * 100.0),
-            mouse,
-        );
-        text(
-            font,
-            "hudba",
-            ui.music_minus.0,
-            ui.music_minus.1 - 2.0,
-            11,
-            dim,
-        );
-        draw_stepper(
-            font,
-            ui.music_minus,
-            ui.music_value,
-            ui.music_plus,
-            &format!("{:.0}%", mix.music * 100.0),
-            mouse,
-        );
-        text(
-            font,
-            "efekty",
-            ui.sfx_minus.0,
-            ui.sfx_minus.1 - 2.0,
-            11,
-            dim,
-        );
-        draw_stepper(
-            font,
-            ui.sfx_minus,
-            ui.sfx_value,
-            ui.sfx_plus,
-            &format!("{:.0}%", mix.sfx * 100.0),
-            mouse,
-        );
-    }
-    draw_chip(
-        font,
-        ui.cat_prostredi,
-        &format!("{}Prostředí", mark(section == 3)),
-        section == 3,
-        mouse,
-    );
-    if section == 3 && ui.viscosity_minus.2 > 0.0 {
-        text(
+
+    // Čistý nadpis "Prostředí" bez rozbalovacího symbolu
+    let (cx, cy, _cw, ch) = ui.cat_prostredi;
+    let size = 15;
+    let col = Color::new(0.96, 1.0, 0.98, 1.0);
+    text(font, "Prostředí", cx + 6.0, cy + ch * 0.7, size, col);
+
+    if ui.viscosity_minus.2 > 0.0 {
+        draw_settings_stepper_line(
             font,
             "viskozita (odpor)",
-            ui.viscosity_minus.0,
-            ui.viscosity_minus.1 - 2.0,
-            11,
-            dim,
-        );
-        draw_stepper(
-            font,
             ui.viscosity_minus,
             ui.viscosity_value,
             ui.viscosity_plus,
             &format!("{viscosity:.1}"),
             mouse,
         );
+        let dim = Color::new(0.65, 0.82, 0.86, 0.88);
         text(
             font,
             "okraje · klik = účinek · −/+ = dosah",
-            ui.edge_effect[0].0,
-            ui.edge_effect[0].1 - 2.0,
+            ui.edge_effect[0].0 + 8.0,
+            ui.edge_effect[0].1 - 3.0,
             11,
             dim,
         );

@@ -138,6 +138,40 @@ impl Organism {
         org
     }
 
+    /// Mutates this organism's genome and rebuilds brain/nodes to match new morphology.
+    pub fn mutate(&mut self, rng: &mut impl Rng) {
+        self.genome.mutate_noticeable(rng);
+        self.brain = Brain::from_genome(&self.genome);
+        self.brain.finish();
+
+        let target_nodes = self.genome.morph.nodes as usize;
+        let axis = self.axis();
+        let center = self.centroid();
+        let rest = if target_nodes > 1 {
+            self.genome.morph.radius * 2.2 / (target_nodes - 1) as f32
+        } else {
+            self.genome.morph.radius
+        };
+        self.rest = rest;
+
+        if target_nodes != self.nodes.len() {
+            let mut new_nodes = Vec::with_capacity(target_nodes);
+            for i in 0..target_nodes {
+                let t = if target_nodes == 1 {
+                    0.0
+                } else {
+                    i as f32 / (target_nodes - 1) as f32 - 0.5
+                };
+                new_nodes.push(center + axis * (t * rest * (target_nodes - 1) as f32));
+            }
+            self.nodes = new_nodes;
+            self.vels = vec![Vec2::ZERO; target_nodes];
+        }
+
+        self.pulse = 1.0;
+        self.birth_pulse = 0.8;
+    }
+
     pub fn centroid(&self) -> Vec2 {
         let mut c = Vec2::ZERO;
         for n in &self.nodes {
