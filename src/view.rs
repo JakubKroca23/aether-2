@@ -1665,7 +1665,7 @@ pub async fn run() {
             let sense_t = (0.55 + 0.45 * pin_t.max(hover_t * 0.55)).clamp(0.55, 1.0);
             draw_senses(&frame, &cam, app, sense_t, sensor_reach);
         }
-        draw_control_bar_bg(&bar);
+        draw_center_mini_panel(&font, world.time(), &bar);
         draw_speed_menu(
             &frame,
             &font,
@@ -2106,6 +2106,8 @@ fn paint_sense_sector(
 
 struct ControlBar {
     bar: (f32, f32, f32, f32),
+    mini_panel: (f32, f32, f32, f32),
+    time_box: (f32, f32, f32, f32),
     settings: (f32, f32, f32, f32),
     pause: (f32, f32, f32, f32),
     saves: (f32, f32, f32, f32),
@@ -2175,18 +2177,34 @@ fn control_bar_layout(
     _half_y: f32,
     speed_open: bool,
 ) -> ControlBar {
-    let icon = 36.0;
-    let gap = 12.0;
-    let total_btns = 4.0 * icon + 3.0 * gap;
-    let cx = frame.sw * 0.5;
-    let bx0 = cx - total_btns * 0.5;
     let y = 16.0;
-    let bar_pad = 6.0;
-    let bar = (bx0 - bar_pad, y - bar_pad * 0.5, total_btns + bar_pad * 2.0, icon + bar_pad);
-    let settings = (bx0, y, icon, icon);
-    let pause = (bx0 + 1.0 * (icon + gap), y, icon, icon);
-    let speed = (bx0 + 2.0 * (icon + gap), y, icon, icon);
-    let saves = (bx0 + 3.0 * (icon + gap), y, icon, icon);
+    let icon = 34.0;
+    let right_pad = 20.0;
+    let gap = 10.0;
+
+    // Tlačítka nahoře vpravo v rohu
+    let settings = (frame.sw - right_pad - icon, y, icon, icon);
+    let saves = (frame.sw - right_pad - icon * 2.0 - gap, y, icon, icon);
+
+    // Středový mini panel: Čas + Pauza + Rychlost
+    let cx = frame.sw * 0.5;
+    let ph = 38.0;
+    let time_w = 64.0;
+    let pause_w = 34.0;
+    let speed_w = 34.0;
+    let pad_x = 12.0;
+    let inner_gap = 8.0;
+    let sep_w = 1.0;
+    let pw = pad_x * 2.0 + time_w + inner_gap + sep_w + inner_gap + pause_w + inner_gap + speed_w;
+    let px0 = cx - pw * 0.5;
+    let py0 = y;
+    let mini_panel = (px0, py0, pw, ph);
+
+    let time_box = (px0 + pad_x, py0, time_w, ph);
+    let pause_x = px0 + pad_x + time_w + inner_gap + sep_w + inner_gap;
+    let pause = (pause_x, py0 + (ph - pause_w) * 0.5, pause_w, pause_w);
+    let speed = (pause_x + pause_w + inner_gap, py0 + (ph - speed_w) * 0.5, speed_w, speed_w);
+
     let mut speed_options = [(0.0, 0.0, 0.0, 0.0); 9];
     if speed_open {
         let ow = 36.0;
@@ -2194,13 +2212,15 @@ fn control_bar_layout(
         let og = 4.0;
         let total = 9.0 * ow + 8.0 * og;
         let x0 = cx - total * 0.5;
-        let oy = y + icon + 10.0;
+        let oy = py0 + ph + 8.0;
         for i in 0..9 {
             speed_options[i] = (x0 + i as f32 * (ow + og), oy, ow, oh);
         }
     }
     ControlBar {
-        bar,
+        bar: mini_panel,
+        mini_panel,
+        time_box,
         settings,
         pause,
         saves,
@@ -2221,10 +2241,10 @@ fn census_rect(
     if !open {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let x = 24.0;
-    let y = 20.0;
-    let w = 240.0;
-    let h = 370.0;
+    let x = 20.0;
+    let y = 16.0;
+    let w = 150.0;
+    let h = 260.0;
     (x, y, w, h)
 }
 
@@ -2278,8 +2298,30 @@ fn speed_label(speed: u32) -> &'static str {
         .unwrap_or("1×")
 }
 
-fn draw_control_bar_bg(_bar: &ControlBar) {
-    // Header background and border removed per user request: icons and clock float cleanly.
+fn draw_center_mini_panel(font: &Option<Font>, sim_time: f32, bar: &ControlBar) {
+    let (x, y, w, h) = bar.mini_panel;
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let r = h * 0.5;
+    fill_round_rect(x, y, w, h, r, Color::new(0.015, 0.04, 0.06, 0.88));
+    stroke_round_rect(x, y, w, h, r, 1.2, Color::new(0.3, 0.65, 0.62, 0.45));
+
+    // Formátovaný čas simulace
+    let mins = (sim_time / 60.0).floor() as u32;
+    let secs = (sim_time % 60.0).floor() as u32;
+    let time_str = if mins >= 60 {
+        format!("{}:{:02}:{:02}", mins / 60, mins % 60, secs)
+    } else {
+        format!("{mins}:{secs:02}")
+    };
+    let (tx, ty, tw, th) = bar.time_box;
+    let time_col = Color::new(0.65, 0.95, 0.90, 0.98);
+    center_text_scaled(font, &time_str, tx + tw * 0.5, ty + th * 0.62, 14, 1.0, time_col);
+
+    // Vertikální dělící linka
+    let sep_x = tx + tw + 8.0;
+    draw_line(sep_x, y + 8.0, sep_x, y + h - 8.0, 1.0, Color::new(0.28, 0.55, 0.55, 0.4));
 }
 
 
@@ -2517,8 +2559,8 @@ fn draw_dish_settings_button(
 
 
 
-const BASE_CHROME_TITLE_FS: u16 = 24;
-const BASE_CHROME_ROW_FS: u16 = 16;
+const BASE_CHROME_TITLE_FS: u16 = 15;
+const BASE_CHROME_ROW_FS: u16 = 11;
 
 fn draw_census(
     frame: &Frame,
@@ -2534,27 +2576,12 @@ fn draw_census(
         return;
     }
     let c = world.census();
-    let (x, y, w, h) = census_rect(frame, cam, center, half_x, half_y, true);
-    fill_round_rect(
-        x - 10.0,
-        y - 8.0,
-        w,
-        h,
-        8.0,
-        Color::new(0.01, 0.03, 0.05, 0.45),
-    );
+    let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, true);
     let title_scale = 1.0;
     let row_scale = 1.0;
-    let row_h = 24.0;
-    let mins = (world.time() / 60.0).floor() as u32;
-    let secs = (world.time() % 60.0).floor() as u32;
-    let time_str = if mins >= 60 {
-        format!("{}:{:02}:{:02}", mins / 60, mins % 60, secs)
-    } else {
-        format!("{mins}:{secs:02}")
-    };
+    let row_h = 16.0;
     let lines: [(&str, String, bool); 14] = [
-        ("EKOSYSTÉM", time_str, true),
+        ("EKOSYSTÉM", String::new(), true),
         ("organismy", format!("{}", c.alive), false),
         ("jídlo", format!("{}", c.food), false),
         ("krmítka", format!("{}", c.feeders), false),
@@ -2572,14 +2599,12 @@ fn draw_census(
     let ink = Color::new(0.9, 0.96, 0.97, 0.95);
     let dim = Color::new(0.62, 0.8, 0.84, 0.85);
     let gold = Color::new(0.40, 0.95, 0.85, 0.98);
-    let time_col = Color::new(0.70, 0.95, 0.92, 0.95);
     let mut yy = y + BASE_CHROME_TITLE_FS as f32 * title_scale;
-    let value_x = x + 140.0;
+    let value_x = x + 76.0;
     for (i, (label, value, header)) in lines.iter().enumerate() {
         if *header {
             text_scaled(font, label, x, yy, BASE_CHROME_TITLE_FS, title_scale, gold);
-            text_scaled(font, value, value_x, yy, BASE_CHROME_TITLE_FS, title_scale, time_col);
-            yy += row_h * 1.2;
+            yy += row_h * 1.15;
             continue;
         }
         text_scaled(font, label, x, yy, BASE_CHROME_ROW_FS, row_scale, dim);
