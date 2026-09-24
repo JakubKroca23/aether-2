@@ -1,7 +1,7 @@
 use aether::{
     delete_save, list_saves, load_simulation, open_default, save_simulation, Appearance,
-    EdgeEffect, EdgeZone, Feeder, Flash, FoodKind, FoodSpec, Net, SaveMeta, Spark, Stats, Vec2,
-    World,
+    EdgeEffect, EdgeZone, Feeder, Flash, FoodKind, FoodSpec, Net, PetriDish, SaveMeta, Spark, Stats,
+    Vec2, World,
 };
 use macroquad::prelude::*;
 
@@ -21,7 +21,7 @@ const W_HEADER_PAD: f32 = 0.032;
 const W_ICON: f32 = 0.088;
 const W_GAP: f32 = 0.02;
 const W_SIDE_GAP: f32 = 0.04;
-const W_CENSUS: f32 = 0.62;
+const W_CENSUS: f32 = 0.68;
 const W_SPEED_OPT_W: f32 = 0.125;
 const W_SPEED_OPT_H: f32 = 0.078;
 const W_SPEED_OPT_GAP: f32 = 0.012;
@@ -184,7 +184,6 @@ pub async fn run() {
     let mut selected_feeder: Option<usize> = None;
     let mut food_panel_open = false;
     let mut food_edit: u8 = 0;
-    let mut census_open = false;
     let mut life_setup_open = false;
     let mut life_setup_dish: Option<u32> = None;
     let mut life_pop: usize = 8;
@@ -726,11 +725,10 @@ pub async fn run() {
         let (gear_x, gear_y, gear_w, gear_h) = settings_button_rect(&frame);
         let on_gear = hit(mouse, gear_x, gear_y, gear_w, gear_h);
         let on_saves_btn = hit_rect(mouse, bar.saves);
-        let info_btn = bar.info;
-        let on_info = hit_rect(mouse, info_btn);
+        let on_dish_settings = hit_rect(mouse, bar.settings);
         let (census_x, census_y, census_w, census_h) =
-            census_rect(&frame, &cam, chrome_center, chrome_hx, chrome_hy, census_open);
-        let on_census = census_open && hit(mouse, census_x, census_y, census_w, census_h);
+            census_rect(&frame, &cam, chrome_center, chrome_hx, chrome_hy, true);
+        let on_census = hit(mouse, census_x, census_y, census_w, census_h);
         let life_ui = if life_setup_open {
             Some(life_setup_layout(&frame))
         } else {
@@ -786,7 +784,7 @@ pub async fn run() {
             || on_pause
             || on_gear
             || on_saves_btn
-            || on_info
+            || on_dish_settings
             || on_census
             || on_speed
             || on_empty_life
@@ -1147,8 +1145,6 @@ pub async fn run() {
             } else if life_setup_open {
                 life_setup_open = false;
                 life_setup_dish = None;
-            } else if census_open {
-                census_open = false;
             } else if saves_open {
                 saves_open = false;
                 save_name_focus = false;
@@ -1167,9 +1163,16 @@ pub async fn run() {
                 begin_screen_transit(&mut screen_transit, Phase::Title, None);
             }
         }
-        if pressed && on_info && !consumed {
-            census_open = !census_open;
+        if pressed && on_dish_settings && !consumed {
+            settings_open = !settings_open;
             audio.play(Sfx::Ui);
+            if !settings_open {
+                settings_section = 0;
+            }
+            food_panel_open = false;
+            speed_open = false;
+            saves_open = false;
+            save_name_focus = false;
             consumed = true;
         } else if pressed && on_empty_life && !consumed {
             if let Some(id) = empty_life_target {
@@ -1244,8 +1247,6 @@ pub async fn run() {
                     consumed = true;
                 }
             }
-        } else if pressed && census_open && !on_census && !on_info && !consumed {
-            census_open = false;
         }
         if pressed && on_food && !consumed {
             food_panel_open = !food_panel_open;
@@ -1417,7 +1418,7 @@ pub async fn run() {
         tool_hovers.pause = damp(tool_hovers.pause, if on_pause { 1.0 } else { 0.0 }, dt, 0.1);
         tool_hovers.settings = damp(
             tool_hovers.settings,
-            if on_gear || settings_open { 1.0 } else { 0.0 },
+            if on_dish_settings || on_gear || settings_open { 1.0 } else { 0.0 },
             dt,
             0.1,
         );
@@ -1427,12 +1428,7 @@ pub async fn run() {
             dt,
             0.1,
         );
-        tool_hovers.info = damp(
-            tool_hovers.info,
-            if on_info || census_open { 1.0 } else { 0.0 },
-            dt,
-            0.1,
-        );
+        tool_hovers.info = 0.0;
         tool_hovers.speed = damp(
             tool_hovers.speed,
             if hit_rect(mouse, speed_ui.main) || speed_open {
@@ -1591,8 +1587,8 @@ pub async fn run() {
             }
         }
         let paint_gfx = if use_shaders { gfx.as_ref() } else { None };
-        // Table floor = lobby water, but pans/zooms with the camera.
-        paint_table_backdrop(paint_gfx, &frame, &cam, table_hx, table_hy, world.time());
+        // Table floor = lobby water, but pans/zooms with the camera, keeping green fog outside dishes.
+        paint_table_backdrop(paint_gfx, &frame, &cam, table_hx, table_hy, world.time(), world.dishes());
         // Dishes = cutouts punched through the fluid.
         for dish in world.dishes() {
             let hover = if over_dish == Some(dish.id) {
@@ -1693,7 +1689,7 @@ pub async fn run() {
         );
         draw_pause_button(&font, &bar, mouse, paused, tool_hovers.pause);
         draw_saves_button(&font, &bar, mouse, saves_open, tool_hovers.saves);
-        draw_info_button(&font, &bar, mouse, census_open, tool_hovers.info);
+        draw_dish_settings_button(&font, &bar, mouse, settings_open, tool_hovers.settings);
         draw_census(
             &frame,
             &font,
@@ -1702,7 +1698,7 @@ pub async fn run() {
             chrome_center,
             chrome_hx,
             chrome_hy,
-            census_open,
+            true,
         );
         for dish in world.dishes() {
             if world.dish_is_empty(dish.id) && !life_setup_open {
@@ -2129,7 +2125,7 @@ fn paint_sense_sector(
 
 struct ControlBar {
     bar: (f32, f32, f32, f32),
-    info: (f32, f32, f32, f32),
+    settings: (f32, f32, f32, f32),
     pause: (f32, f32, f32, f32),
     saves: (f32, f32, f32, f32),
     speed: (f32, f32, f32, f32),
@@ -2141,7 +2137,7 @@ struct ControlBar {
 /// Screen region for the dish viewport (bottom tools stay fixed on screen).
 fn dish_fit_rect(frame: &Frame) -> (f32, f32, f32, f32) {
     let left = DISH_FIT_PAD;
-    let top = DISH_FIT_PAD;
+    let top = 56.0;
     let right_pad = DISH_FIT_PAD;
     let bottom_pad = TOOL + 36.0;
     let w = (frame.sw - left - right_pad).max(80.0);
@@ -2170,8 +2166,8 @@ fn fill_round_rect(x: f32, y: f32, w: f32, h: f32, radius: f32, color: Color) {
     draw_rectangle(x + r, y, (w - 2.0 * r).max(0.0), h, color);
     draw_rectangle(x, y + r, w, (h - 2.0 * r).max(0.0), color);
     draw_circle(x + r, y + r, r, color);
-    draw_circle(x + w - r, y + r, r, color);
     draw_circle(x + r, y + h - r, r, color);
+    draw_circle(x + w - r, y + r, r, color);
     draw_circle(x + w - r, y + h - r, r, color);
 }
 
@@ -2217,7 +2213,7 @@ fn control_bar_layout(
     let y = dy - header_gap - h;
     let bar = (x, y, w, h);
     let iy = y + (h - icon) * 0.5;
-    let info = (x + pad, iy, icon, icon);
+    let settings = (x + pad, iy, icon, icon);
     let mut rx = x + w - pad - icon;
     let speed = (rx, iy, icon, icon);
     rx -= icon + gap;
@@ -2238,7 +2234,7 @@ fn control_bar_layout(
     }
     ControlBar {
         bar,
-        info,
+        settings,
         pause,
         saves,
         speed,
@@ -2259,15 +2255,16 @@ fn census_rect(
         return (0.0, 0.0, 0.0, 0.0);
     }
     let s = world_scale(frame, cam).max(1e-3);
-    let (dx, dy, _dw, dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
+    let (dx, dy, dw, _dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
     let w = px(W_CENSUS, s);
     let gap = px(W_SIDE_GAP, s);
-    let pad = px(0.032, s);
-    let title_fs = chrome_font(s, 0.042) as f32;
-    let row_h = px(0.052, s);
-    // 1 title + 13 body rows — keep in sync with draw_census.
-    let h = (pad + title_fs + row_h * 0.35 + 13.0 * row_h + pad).min(dh);
-    (dx - gap - w, dy, w, h)
+    let title_fs = chrome_font(s, 0.042 * 1.5) as f32;
+    let row_h = px(0.052 * 1.5, s);
+    // 1 title + 13 body rows — enlarged by 50%.
+    let h = title_fs + row_h * 1.1 + 13.0 * row_h;
+    let x = dx + dw + gap;
+    let y = dy;
+    (x, y, w, h)
 }
 
 fn spawn_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
@@ -2324,13 +2321,8 @@ fn speed_label(speed: u32) -> &'static str {
         .unwrap_or("1×")
 }
 
-fn draw_control_bar_bg(bar: &ControlBar) {
-    let (x, y, w, h) = bar.bar;
-    let s = bar.s;
-    let r = px(0.028, s).min(h * 0.45);
-    let rim = (px(0.0035, s)).max(1.0);
-    fill_round_rect(x, y, w, h, r, CHROME_FILL);
-    stroke_round_rect(x, y, w, h, r, rim, CHROME_EDGE);
+fn draw_control_bar_bg(_bar: &ControlBar) {
+    // Header background and border removed per user request: icons and clock float cleanly.
 }
 
 fn chrome_font(s: f32, world_em: f32) -> u16 {
@@ -2556,16 +2548,30 @@ fn draw_saves_button(
     draw_line(cx - 7.0 * u, cy + 8.0 * u, cx + 7.0 * u, cy + 8.0 * u, stroke, ink);
 }
 
-fn draw_info_button(
-    font: &Option<Font>,
+fn draw_dish_settings_button(
+    _font: &Option<Font>,
     bar: &ControlBar,
     mouse: (f32, f32),
     open: bool,
     hover_t: f32,
 ) {
-    let (x, y, w, h) = bar.info;
+    let (x, y, w, h) = bar.settings;
     let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    center_text(font, "i", cx, cy + h * 0.18, chrome_font(bar.s, 0.055), ink);
+    let u = w / 28.0;
+    let stroke = (1.5 * u).max(1.0);
+    draw_circle_lines(cx, cy, 5.8 * u, stroke, ink);
+    draw_circle(cx, cy, 2.0 * u, ink);
+    for i in 0..8 {
+        let a = i as f32 / 8.0 * std::f32::consts::TAU;
+        draw_line(
+            cx + a.cos() * 6.8 * u,
+            cy + a.sin() * 6.8 * u,
+            cx + a.cos() * 9.8 * u,
+            cy + a.sin() * 9.8 * u,
+            stroke,
+            ink,
+        );
+    }
 }
 
 fn draw_settings_button(
@@ -2615,13 +2621,10 @@ fn draw_census(
     }
     let s = world_scale(frame, cam).max(1e-3);
     let c = world.census();
-    let (x, y, w, h) = census_rect(frame, cam, center, half_x, half_y, true);
-    let rim = px(0.004, s).max(1.0);
-    let pad = px(0.032, s);
-    let title_fs = chrome_font(s, 0.042);
-    let row_fs = chrome_font(s, 0.036);
-    let row_h = px(0.052, s);
-    let corner = px(0.04, s);
+    let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, true);
+    let title_fs = chrome_font(s, 0.042 * 1.5);
+    let row_fs = chrome_font(s, 0.036 * 1.5);
+    let row_h = px(0.052 * 1.5, s);
     let lines: [(&str, String, bool); 14] = [
         ("EKOSYSTÉM", String::new(), true),
         ("organismy", format!("{}", c.alive), false),
@@ -2638,21 +2641,19 @@ fn draw_census(
         ("Ø neurony", format!("{:.0}", c.mean_neurons), false),
         ("Ø synapse", format!("{:.0}", c.mean_synapses), false),
     ];
-    fill_round_rect(x, y, w, h, corner, CHROME_FILL);
-    stroke_round_rect(x, y, w, h, corner, rim, CHROME_EDGE);
+    // Background and border removed: typography floats seamlessly on the right side of dish.
     let ink = Color::new(0.9, 0.96, 0.97, 0.95);
-    let dim = Color::new(0.62, 0.8, 0.84, 0.9);
-    let gold = Color::new(0.45, 0.92, 0.82, 0.95);
-    // draw_text_ex uses baseline — start below the top padding.
-    let mut yy = y + pad + title_fs as f32;
-    let value_x = x + w * 0.55;
+    let dim = Color::new(0.62, 0.8, 0.84, 0.85);
+    let gold = Color::new(0.40, 0.95, 0.85, 0.98);
+    let mut yy = y + title_fs as f32;
+    let value_x = x + px(0.35, s);
     for (i, (label, value, header)) in lines.iter().enumerate() {
         if *header {
-            text(font, label, x + pad, yy, title_fs, gold);
-            yy += row_h * 1.05;
+            text(font, label, x, yy, title_fs, gold);
+            yy += row_h * 1.1;
             continue;
         }
-        text(font, label, x + pad, yy, row_fs, dim);
+        text(font, label, x, yy, row_fs, dim);
         text(
             font,
             value,
@@ -2854,6 +2855,7 @@ fn draw_life_setup(
     draw_chip(font, ui.start, "Založit život", true, mouse);
 }
 
+#[allow(dead_code)]
 fn dish_screen_rect(frame: &Frame, cam: &Cam, half_x: f32, half_y: f32) -> (f32, f32, f32, f32) {
     dish_screen_rect_at(frame, cam, Vec2::ZERO, half_x, half_y)
 }
@@ -2891,7 +2893,19 @@ fn paint_lobby_backdrop(
 ) {
     let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
     if let Some(g) = gfx {
-        g.draw_water(0.0, 0.0, frame.sw, frame.sh, time, aspect, floor_light);
+        g.draw_water(
+            0.0,
+            0.0,
+            frame.sw,
+            frame.sh,
+            time,
+            aspect,
+            floor_light,
+            &[],
+            0.0,
+            (0.0, 0.0),
+            0.0,
+        );
     } else {
         // CPU path: oversized world half so dish_screen_rect covers the whole window.
         let cam = Cam::identity();
@@ -2899,11 +2913,12 @@ fn paint_lobby_backdrop(
         let (ox, oy) = view_origin(frame);
         let half_x = (ox.max(frame.sw - ox) / scale).max(aspect);
         let half_y = (oy.max(frame.sh - oy) / scale).max(1.0);
-        draw_liquid_bg(frame, &cam, half_x, half_y, time, floor_light);
+        draw_liquid_bg(frame, &cam, half_x, half_y, time, floor_light, &[]);
     }
 }
 
-/// Table water that pans and zooms with the game camera.
+/// Table water that pans and zooms with the game camera, showing the fluid background
+/// and stopping the surrounding green fog at dish boundaries.
 fn paint_table_backdrop(
     gfx: Option<&Gfx>,
     frame: &Frame,
@@ -2911,21 +2926,54 @@ fn paint_table_backdrop(
     table_hx: f32,
     table_hy: f32,
     time: f32,
+    dishes: &[PetriDish],
 ) {
-    let (vhx, vhy) = visible_world_half(frame, cam);
-    let hx = (table_hx + cam.center.x.abs() + 1.5).max(vhx + 0.85);
-    let hy = (table_hy + cam.center.y.abs() + 1.5).max(vhy + 0.85);
-    paint_liquid_bg(gfx, frame, cam, hx, hy, time, None);
+    let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
+    let scale = world_scale(frame, cam);
+    let mut dish_uvs: Vec<[f32; 4]> = Vec::new();
+    let mut dish_corner_uv = 0.0f32;
+    for dish in dishes.iter().take(4) {
+        let (min_x, min_y, dw, dh) = dish_screen_rect_at(frame, cam, dish.pos, dish.half_x, dish.half_y);
+        let corner = px(W_DISH_CORNER.min(dish.half_x * 0.4).min(dish.half_y * 0.4), scale);
+        dish_uvs.push([
+            min_x / frame.sw.max(1.0),
+            min_y / frame.sh.max(1.0),
+            (min_x + dw) / frame.sw.max(1.0),
+            (min_y + dh) / frame.sh.max(1.0),
+        ]);
+        dish_corner_uv = corner / frame.sh.max(1.0);
+    }
+
+    if let Some(g) = gfx {
+        g.draw_water(
+            0.0,
+            0.0,
+            frame.sw,
+            frame.sh,
+            time,
+            aspect,
+            None,
+            &dish_uvs,
+            dish_corner_uv,
+            (cam.center.x, cam.center.y),
+            cam.zoom,
+        );
+    } else {
+        let (vhx, vhy) = visible_world_half(frame, cam);
+        let hx = (table_hx + cam.center.x.abs() + 1.5).max(vhx + 0.85);
+        let hy = (table_hy + cam.center.y.abs() + 1.5).max(vhy + 0.85);
+        draw_liquid_bg(frame, cam, hx, hy, time, None, dishes);
+    }
 }
 
-/// Dish as a cutout hole punched through the fluid table.
+/// Dish boundary — visually part of the background, with glass rim barrier holding back the surrounding green fog.
 fn paint_dish_cutout(
     frame: &Frame,
     cam: &Cam,
     center: Vec2,
     half_x: f32,
     half_y: f32,
-    time: f32,
+    _time: f32,
     hover: f32,
 ) {
     let (min_x, min_y, dw, dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
@@ -2936,65 +2984,33 @@ fn paint_dish_cutout(
     );
     let hover = smoother(hover.clamp(0.0, 1.0));
 
-    // Soft shadow on the fluid around the hole — reads as depth into the table.
-    for i in 0..5 {
-        let u = (i as f32 + 1.0) / 5.0;
-        let grow = px(0.012 + 0.018 * u, scale);
-        fill_round_rect(
-            min_x - grow,
-            min_y - grow,
-            dw + grow * 2.0,
-            dh + grow * 2.0,
-            corner + grow,
-            Color::new(0.0, 0.0, 0.0, 0.07 * (1.0 - u) * (1.0 - u)),
-        );
-    }
+    // Outer glass wall rim highlight / glow — the physical barrier holding back the green fog
+    let rim = (px(0.005, scale)).max(1.4);
+    let rim_a = 0.45 + 0.40 * hover;
 
-    // Void: fluid removed — near-black gel floor.
-    fill_round_rect(min_x, min_y, dw, dh, corner, Color::new(0.01, 0.014, 0.013, 1.0));
-    for i in 0..5 {
-        let u = i as f32 / 4.0;
-        let inset_x = dw * (0.05 + 0.12 * u);
-        let inset_y = dh * (0.05 + 0.12 * u);
-        let ir = (corner - inset_x.min(inset_y) * 0.35).max(0.0);
-        fill_round_rect(
-            min_x + inset_x,
-            min_y + inset_y,
-            (dw - inset_x * 2.0).max(1.0),
-            (dh - inset_y * 2.0).max(1.0),
-            ir,
-            Color::new(0.025 + 0.02 * u, 0.04 + 0.025 * u, 0.035 + 0.02 * u, 0.07),
-        );
-    }
-    let clouds = [
-        (0.18, 0.12, 0.4, 0.05, 0.6),
-        (-0.22, -0.18, 0.36, 0.04, 1.4),
-        (0.28, -0.25, 0.32, 0.045, 2.2),
-        (-0.3, 0.26, 0.38, 0.035, 2.9),
-    ];
-    for (bx, by, rad, spd, phase) in clouds {
-        let ox = (time * spd + phase).sin() * 0.05;
-        let oy = (time * spd * 0.65 + phase * 1.2).cos() * 0.04;
-        let (sx, sy) = world_to_screen(frame, cam, center + Vec2::new(bx + ox, by + oy));
-        let r = rad * (1.0 + 0.03 * (time * 0.3 + phase).sin()) * scale;
-        for i in (0..8).rev() {
-            let u = (i as f32 + 1.0) / 8.0;
-            let a = 0.016 * (1.0 - u) * (1.0 - u);
-            draw_circle(sx, sy, r * u, Color::new(0.05, 0.1, 0.07, a));
-        }
-    }
-    // Inner lip highlight (cut edge of the fluid sheet).
-    let rim = (px(0.005, scale)).max(1.2);
-    let rim_a = 0.35 + 0.45 * hover;
+    // Soft glass refraction halo at the boundary
     stroke_round_rect(
-        min_x,
-        min_y,
-        dw,
-        dh,
-        corner,
-        rim * (1.4 + 0.8 * hover),
-        Color::new(0.15, 0.45, 0.42, 0.25 + 0.2 * hover),
+        min_x - rim * 0.6,
+        min_y - rim * 0.6,
+        dw + rim * 1.2,
+        dh + rim * 1.2,
+        corner + rim * 0.6,
+        rim * 1.6,
+        Color::new(0.12, 0.45, 0.40, 0.20 + 0.15 * hover),
     );
+
+    // Outer edge of the glass wall
+    stroke_round_rect(
+        min_x - rim * 0.25,
+        min_y - rim * 0.25,
+        dw + rim * 0.5,
+        dh + rim * 0.5,
+        corner + rim * 0.25,
+        rim * 0.8,
+        Color::new(0.25, 0.70, 0.65, 0.35 + 0.25 * hover),
+    );
+
+    // Inner bright specular rim of the glass container
     stroke_round_rect(
         min_x,
         min_y,
@@ -3002,8 +3018,19 @@ fn paint_dish_cutout(
         dh,
         corner,
         rim,
-        Color::new(0.55 + 0.25 * hover, 0.95, 0.9, rim_a),
+        Color::new(0.60 + 0.25 * hover, 0.95, 0.92, rim_a),
     );
+
+    // Subtle glass container sheen inside the dish (very faint transparency)
+    fill_round_rect(
+        min_x,
+        min_y,
+        dw,
+        dh,
+        corner,
+        Color::new(0.04, 0.16, 0.18, 0.025),
+    );
+
     if hover > 0.02 {
         stroke_round_rect(
             min_x - px(0.01, scale),
@@ -3012,33 +3039,8 @@ fn paint_dish_cutout(
             dh + px(0.02, scale),
             corner + px(0.01, scale),
             (px(0.008, scale)).max(1.5),
-            Color::new(0.4, 0.95, 0.88, 0.22 * hover),
+            Color::new(0.4, 0.95, 0.88, 0.25 * hover),
         );
-    }
-}
-
-fn paint_liquid_bg(
-    gfx: Option<&Gfx>,
-    frame: &Frame,
-    cam: &Cam,
-    half_x: f32,
-    half_y: f32,
-    time: f32,
-    floor_light: Option<((f32, f32), f32)>,
-) {
-    if let Some(g) = gfx {
-        let (min_x, min_y, dw, dh) = dish_screen_rect(frame, cam, half_x, half_y);
-        g.draw_water(
-            min_x,
-            min_y,
-            dw,
-            dh,
-            time,
-            half_x / half_y.max(1e-4),
-            floor_light,
-        );
-    } else {
-        draw_liquid_bg(frame, cam, half_x, half_y, time, floor_light);
     }
 }
 
@@ -3874,6 +3876,7 @@ fn draw_liquid_bg(
     half_y: f32,
     time: f32,
     floor_light: Option<((f32, f32), f32)>,
+    dishes: &[PetriDish],
 ) {
     let corners = [
         Vec2::new(-half_x, -half_y),
@@ -3916,7 +3919,7 @@ fn draw_liquid_bg(
 
     let scale = world_scale(frame, cam);
 
-    // Slow cloudy water volume (world-space, zooms with the camera).
+    // Slow cloudy water volume (world-space, zooms with the camera — kept outside dishes).
     let volumes = [
         (0.12, 0.18, 0.55, 0.11, 0.4, 0.04, 0.14, 0.16),
         (-0.28, -0.2, 0.48, 0.09, 1.1, 0.03, 0.12, 0.15),
@@ -3929,8 +3932,17 @@ fn draw_liquid_bg(
     for (bx, by, rad, spd, phase, cr, cg, cb) in volumes {
         let ox = (time * spd + phase).sin() * 0.1;
         let oy = (time * spd * 0.7 + phase * 1.3).cos() * 0.08;
+        let p = Vec2::new(bx + ox, by + oy);
+        // Exclude volume clouds that fall inside any dish
+        let inside_dish = dishes.iter().any(|d| {
+            let rel = p - d.pos;
+            rel.x.abs() < d.half_x && rel.y.abs() < d.half_y
+        });
+        if inside_dish {
+            continue;
+        }
         let breathe = 1.0 + 0.07 * (time * 0.35 + phase).sin();
-        let (sx, sy) = world_to_screen(frame, cam, Vec2::new(bx + ox, by + oy));
+        let (sx, sy) = world_to_screen(frame, cam, p);
         let r = rad * breathe * scale;
         for i in (0..14).rev() {
             let u = (i as f32 + 1.0) / 14.0;
@@ -3999,12 +4011,19 @@ fn draw_liquid_bg(
         );
     }
 
-    // Microbubbles / suspended particles
+    // Microbubbles / suspended particles (kept outside dishes)
     for i in 0..18 {
         let seed = i as f32 * 0.73;
         let drift = time * (0.04 + (i % 5) as f32 * 0.01);
         let px = ((seed * 5.1 + drift).sin() * 0.7) * half_x;
         let py = ((seed * 3.7 + drift * 0.8).cos() * 0.65) * half_y;
+        let inside_dish = dishes.iter().any(|d| {
+            let rel = Vec2::new(px, py) - d.pos;
+            rel.x.abs() < d.half_x && rel.y.abs() < d.half_y
+        });
+        if inside_dish {
+            continue;
+        }
         let (sx, sy) = world_to_screen(frame, cam, Vec2::new(px, py));
         let twinkle = 0.5 + 0.5 * (time * 1.4 + seed * 2.0).sin();
         let rad = (1.2 + (i % 3) as f32 * 0.6) * cam.zoom.sqrt().max(0.7);

@@ -56,9 +56,11 @@
 ## Running / table
 
 - Table floor = stejný liquid jako lobby, ale **world-space** s kamerou.  
-- Dish = cutout hole (near-black gel uvnitř + rim).  
-- Chrome: flat dark panels (`CHROME_FILL` / `CHROME_EDGE`), world-scaled header ikony.  
-- Inspect: Info + Genom taby, české blurb texty podle hue/stats.
+- Miska je **vizuálně součástí pozadí** (tekutina a kaustika prochází vnitřkem misky).  
+- Ohraničení misky (skleněný lem) funguje jako fyzická bariéra: **uvnitř misky není ani zelená mlha, ani tečky/bubliny** (ty zůstávají na stole vně misek).  
+- Přehled **EKOSYSTÉM** (census) je trvale zobrazen vpravo vedle misky, zvětšený o 50 %, bez rámečku a pozadí (čistá plovoucí typografie). Je pevně svázán s miskou (pohybuje se 1:1 s ní bez odskakování u horního okraje) a rozestup mezi názvy a hodnotami je čistě relativní vůči měřítku světa, takže se při zoomování nemění. Tlačítko `i` bylo zrušeno.  
+- Hlavička misky: border a pozadí odstraněny (ikony a čas plují volně nad miskou). Vlevo v hlavičce je tlačítko pro nastavení misky (ikona ozubeného kola).  
+- Chrome: flat dark panels (`CHROME_FILL` / `CHROME_EDGE`) pro modály, inspect: Info + Genom taby.
 
 ---
 
@@ -117,6 +119,9 @@
 | Letter motion | Per-glyph float; front least / back most |
 | New game FX | Zoom + radial blur + shatter toward camera |
 | Lobby water | Fullscreen; cursor clears green gel too |
+| Dish & mlha | Miska je součástí pozadí; ohraničení nepustí okolní zelenou mlhu dovnitř |
+| Vnitřek misky | Uvnitř misky není mlha ani tečky (čistá tekutina); vně zůstávají |
+| EKOSYSTÉM & header | Trvalý census vpravo od misky (+50 %, bez karty); hlavička bez boxu, vlevo nastavení |
 
 ---
 

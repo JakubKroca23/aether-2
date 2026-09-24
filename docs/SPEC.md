@@ -137,8 +137,8 @@ API: `open_default`, `list_saves`, `save_simulation`, `load_simulation`, `delete
 
 ### 4.3 Running chrome
 - Bottom TOOL bar (spawn, pause, food, dish, settings, saves, info, speed)  
-- Header / census  
-- Dish cutout do fluid table  
+- Header bez rámečku a pozadí s tlačítkem nastavení misky vlevo; přehled EKOSYSTÉM trvale vpravo vedle misky (+50 %, bez karty)  
+- Miska součástí tekutého pozadí; uvnitř bez mlhy a teček, skleněný lem zadržuje okolní zelenou mlhu a částice  
 - Inspect right panel (Info / Genom)  
 - Life setup modal pro prázdnou misku  
 - Camera: pan, zoom, follow pinned organism  
