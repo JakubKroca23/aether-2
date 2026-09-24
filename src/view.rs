@@ -15,11 +15,10 @@ const DISH_FIT_PAD: f32 = 12.0;
 const TOOL: f32 = 84.0;
 
 // Dish-attached chrome in **world units** (scales with camera zoom).
-const W_HEADER_H: f32 = 0.13;
+const W_HEADER_H: f32 = 0.16;
 const W_HEADER_GAP: f32 = 0.028;
-const W_HEADER_PAD: f32 = 0.032;
-const W_ICON: f32 = 0.088;
-const W_GAP: f32 = 0.02;
+const W_ICON: f32 = 0.115;
+const W_GAP: f32 = 0.045;
 const W_SIDE_GAP: f32 = 0.04;
 const W_CENSUS: f32 = 0.68;
 const W_SPEED_OPT_W: f32 = 0.125;
@@ -669,6 +668,8 @@ pub async fn run() {
 
         // Dish size is fixed in world units — never reshape from window aspect.
         if shot && world.time() < 18.0 {
+            let (tx, ty) = world.table_bounds();
+            reset_cam_to_dish(&mut home, &mut cam, &frame, tx, ty);
             while world.time() < 18.0 {
                 world.step(1.0 / 60.0);
             }
@@ -722,8 +723,6 @@ pub async fn run() {
         let (spawn_x, spawn_y, spawn_w, spawn_h) = spawn_button_rect(&frame);
         let on_spawn = hit(mouse, spawn_x, spawn_y, spawn_w, spawn_h);
         let on_pause = hit_rect(mouse, bar.pause);
-        let (gear_x, gear_y, gear_w, gear_h) = settings_button_rect(&frame);
-        let on_gear = hit(mouse, gear_x, gear_y, gear_w, gear_h);
         let on_saves_btn = hit_rect(mouse, bar.saves);
         let on_dish_settings = hit_rect(mouse, bar.settings);
         let (census_x, census_y, census_w, census_h) =
@@ -763,7 +762,7 @@ pub async fn run() {
         );
         let on_speed = hit_rect(mouse, speed_ui.main)
             || (speed_open && speed_ui.options.iter().any(|r| hit_rect(mouse, *r)));
-        let setup = settings_menu(&frame, settings_open, settings_section);
+        let setup = settings_menu(&frame, bar.settings, settings_open, settings_section);
         let on_setup = settings_open && hit_rect(mouse, setup.panel);
         let saves_ui = if saves_open {
             Some(saves_panel_layout(&frame, save_list.len(), true))
@@ -782,7 +781,6 @@ pub async fn run() {
             || on_dish
             || on_spawn
             || on_pause
-            || on_gear
             || on_saves_btn
             || on_dish_settings
             || on_census
@@ -864,17 +862,6 @@ pub async fn run() {
             } else {
                 save_name_focus = false;
             }
-            consumed = true;
-        } else if pressed && on_gear {
-            settings_open = !settings_open;
-            audio.play(Sfx::Ui);
-            if !settings_open {
-                settings_section = 0;
-            }
-            food_panel_open = false;
-            speed_open = false;
-            saves_open = false;
-            save_name_focus = false;
             consumed = true;
         } else if pressed && saves_open && on_saves_panel {
             if let Some(sui) = saves_ui.as_ref() {
@@ -1017,7 +1004,7 @@ pub async fn run() {
                 }
             }
             consumed = true;
-        } else if pressed && settings_open && !on_setup && !on_gear {
+        } else if pressed && settings_open && !on_setup && !on_dish_settings {
             settings_open = false;
             settings_section = 0;
             consumed = true;
@@ -1418,7 +1405,7 @@ pub async fn run() {
         tool_hovers.pause = damp(tool_hovers.pause, if on_pause { 1.0 } else { 0.0 }, dt, 0.1);
         tool_hovers.settings = damp(
             tool_hovers.settings,
-            if on_dish_settings || on_gear || settings_open { 1.0 } else { 0.0 },
+            if on_dish_settings || settings_open { 1.0 } else { 0.0 },
             dt,
             0.1,
         );
@@ -1676,7 +1663,6 @@ pub async fn run() {
             draw_senses(&frame, &cam, app, sense_t, sensor_reach);
         }
         draw_control_bar_bg(&bar);
-        draw_control_time(&font, &world, &bar);
         draw_speed_menu(
             &frame,
             &font,
@@ -1760,7 +1746,6 @@ pub async fn run() {
                 draw_dish_ghost(&frame, &cam, p, phx, phy, ok);
             }
         }
-        draw_settings_button(&frame, &font, mouse, settings_open, tool_hovers.settings);
         if settings_open {
             draw_settings_menu(
                 &frame,
@@ -2203,7 +2188,6 @@ fn control_bar_layout(
     let s = world_scale(frame, cam).max(1e-3);
     let (dx, dy, dw, _dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
     let pill_h = px(W_HEADER_H, s);
-    let pad = px(W_HEADER_PAD, s);
     let icon = px(W_ICON, s);
     let gap = px(W_GAP, s);
     let header_gap = px(W_HEADER_GAP, s);
@@ -2213,13 +2197,13 @@ fn control_bar_layout(
     let y = dy - header_gap - h;
     let bar = (x, y, w, h);
     let iy = y + (h - icon) * 0.5;
-    let settings = (x + pad, iy, icon, icon);
-    let mut rx = x + w - pad - icon;
-    let speed = (rx, iy, icon, icon);
-    rx -= icon + gap;
-    let saves = (rx, iy, icon, icon);
-    rx -= icon + gap;
-    let pause = (rx, iy, icon, icon);
+
+    let total_btns = 4.0 * icon + 3.0 * gap;
+    let bx0 = x + (w - total_btns) * 0.5;
+    let settings = (bx0, iy, icon, icon);
+    let pause = (bx0 + 1.0 * (icon + gap), iy, icon, icon);
+    let speed = (bx0 + 2.0 * (icon + gap), iy, icon, icon);
+    let saves = (bx0 + 3.0 * (icon + gap), iy, icon, icon);
     let mut speed_options = [(0.0, 0.0, 0.0, 0.0); 9];
     if speed_open {
         let ow = px(W_SPEED_OPT_W, s);
@@ -2279,13 +2263,9 @@ fn dish_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
     bottom_tool_slot(frame, 2)
 }
 
-fn settings_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
-    bottom_tool_slot(frame, 3)
-}
-
 fn bottom_tool_slot(frame: &Frame, slot: usize) -> (f32, f32, f32, f32) {
-    let count = 4usize;
-    let gap = 12.0;
+    let count = 3usize;
+    let gap = 20.0;
     let total = count as f32 * TOOL + (count - 1) as f32 * gap;
     let x0 = frame.sw * 0.5 - total * 0.5;
     let y = frame.sh - TOOL - 22.0;
@@ -2328,20 +2308,6 @@ fn draw_control_bar_bg(_bar: &ControlBar) {
 fn chrome_font(s: f32, world_em: f32) -> u16 {
     // Follow world scale freely so table chrome zooms with the dish.
     px(world_em, s).round().clamp(3.0, 200.0) as u16
-}
-
-fn draw_control_time(font: &Option<Font>, world: &World, bar: &ControlBar) {
-    let (bx, by, bw, bh) = bar.bar;
-    let mins = (world.time() / 60.0).floor() as u32;
-    let secs = (world.time() % 60.0).floor() as u32;
-    center_text(
-        font,
-        &format!("{mins}:{secs:02}"),
-        bx + bw * 0.5,
-        by + bh * 0.68,
-        chrome_font(bar.s, 0.048),
-        Color::new(0.78, 0.96, 0.94, 0.95),
-    );
 }
 
 fn paint_header_icon(
@@ -2574,37 +2540,7 @@ fn draw_dish_settings_button(
     }
 }
 
-fn draw_settings_button(
-    frame: &Frame,
-    font: &Option<Font>,
-    mouse: (f32, f32),
-    open: bool,
-    hover_t: f32,
-) {
-    let (x, y, w, h) = settings_button_rect(frame);
-    let (hot, cx, cy) =
-        paint_round_tool(x, y, w, h, mouse, open, (0.28, 0.9, 0.82), true, hover_t);
-    let lit = open || hot || hover_t > 0.4;
-    let ink = if lit {
-        Color::new(0.75, 0.98, 0.94, 1.0)
-    } else {
-        Color::new(0.55, 0.78, 0.8, 0.95)
-    };
-    draw_circle_lines(cx, cy, 6.2, 1.5, ink);
-    draw_circle(cx, cy, 2.1, ink);
-    for i in 0..8 {
-        let a = i as f32 / 8.0 * std::f32::consts::TAU;
-        draw_line(
-            cx + a.cos() * 7.4,
-            cy + a.sin() * 7.4,
-            cx + a.cos() * 10.6,
-            cy + a.sin() * 10.6,
-            1.7,
-            ink,
-        );
-    }
-    tool_label(font, "Nastavení", x, y, w, h, lit);
-}
+
 
 fn draw_census(
     frame: &Frame,
@@ -2625,8 +2561,15 @@ fn draw_census(
     let title_fs = chrome_font(s, 0.042 * 1.5);
     let row_fs = chrome_font(s, 0.036 * 1.5);
     let row_h = px(0.052 * 1.5, s);
+    let mins = (world.time() / 60.0).floor() as u32;
+    let secs = (world.time() % 60.0).floor() as u32;
+    let time_str = if mins >= 60 {
+        format!("{}:{:02}:{:02}", mins / 60, mins % 60, secs)
+    } else {
+        format!("{mins}:{secs:02}")
+    };
     let lines: [(&str, String, bool); 14] = [
-        ("EKOSYSTÉM", String::new(), true),
+        ("EKOSYSTÉM", time_str, true),
         ("organismy", format!("{}", c.alive), false),
         ("jídlo", format!("{}", c.food), false),
         ("krmítka", format!("{}", c.feeders), false),
@@ -2645,11 +2588,13 @@ fn draw_census(
     let ink = Color::new(0.9, 0.96, 0.97, 0.95);
     let dim = Color::new(0.62, 0.8, 0.84, 0.85);
     let gold = Color::new(0.40, 0.95, 0.85, 0.98);
+    let time_col = Color::new(0.70, 0.95, 0.92, 0.95);
     let mut yy = y + title_fs as f32;
-    let value_x = x + px(0.35, s);
+    let value_x = x + px(0.36, s);
     for (i, (label, value, header)) in lines.iter().enumerate() {
         if *header {
             text(font, label, x, yy, title_fs, gold);
+            text(font, value, value_x, yy, title_fs, time_col);
             yy += row_h * 1.1;
             continue;
         }
@@ -3021,14 +2966,25 @@ fn paint_dish_cutout(
         Color::new(0.60 + 0.25 * hover, 0.95, 0.92, rim_a),
     );
 
-    // Subtle glass container sheen inside the dish (very faint transparency)
+    // Dark glass petri dish base — dark tinted glass letting through minimum of background
     fill_round_rect(
         min_x,
         min_y,
         dw,
         dh,
         corner,
-        Color::new(0.04, 0.16, 0.18, 0.025),
+        Color::new(0.008, 0.020, 0.026, 0.91),
+    );
+
+    // Faint inner rim reflection of dark glass
+    stroke_round_rect(
+        min_x + rim * 0.8,
+        min_y + rim * 0.8,
+        (dw - rim * 1.6).max(1.0),
+        (dh - rim * 1.6).max(1.0),
+        (corner - rim * 0.8).max(0.0),
+        rim * 0.8,
+        Color::new(0.18, 0.50, 0.48, 0.16 + 0.10 * hover),
     );
 
     if hover > 0.02 {
@@ -3754,7 +3710,7 @@ fn draw_dish_button(
     draw_rectangle_lines(cx - 16.0, cy - 12.0, 32.0, 24.0, 2.0, ink);
     draw_rectangle_lines(cx - 10.0, cy - 7.0, 20.0, 14.0, 1.4, ink);
     draw_circle(cx + 14.0, cy - 14.0, 5.5, Color::new(0.35, 0.95, 0.85, if lit { 0.95 } else { 0.55 }));
-    tool_label(font, "Miska", x, y, w, h, lit);
+    tool_label(font, "Přidat misku", x, y, w, h, lit);
 }
 
 fn draw_dish_ghost(
@@ -6373,8 +6329,13 @@ fn stepper_row(x: f32, y: f32, w: f32, h: f32) -> [(f32, f32, f32, f32); 3] {
     ]
 }
 
-fn settings_menu(frame: &Frame, open: bool, section: u8) -> SettingsMenu {
-    let (gx, gy, gw, _gh) = settings_button_rect(frame);
+fn settings_menu(
+    frame: &Frame,
+    anchor: (f32, f32, f32, f32),
+    open: bool,
+    section: u8,
+) -> SettingsMenu {
+    let (gx, gy, gw, gh) = anchor;
     let w = 300.0;
     let x = (gx + gw * 0.5 - w * 0.5).clamp(8.0, frame.sw - w - 8.0);
     let row = 32.0;
@@ -6456,7 +6417,7 @@ fn settings_menu(frame: &Frame, open: bool, section: u8) -> SettingsMenu {
     } else {
         0.0
     };
-    let y0 = (gy - 12.0 - content_h).max(8.0);
+    let y0 = (gy + gh + 8.0).clamp(8.0, frame.sh - content_h - 8.0);
     let shift = |r: (f32, f32, f32, f32)| {
         if r.2 <= 0.0 {
             r

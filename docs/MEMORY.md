@@ -56,10 +56,11 @@
 ## Running / table
 
 - Table floor = stejný liquid jako lobby, ale **world-space** s kamerou.  
-- Miska je **vizuálně součástí pozadí** (tekutina a kaustika prochází vnitřkem misky).  
+- Vnitřek misky má dno z **tmavého skla**, které propouští jen minimum ambientního pozadí (91% krytí tmavého laboratorního skla), díky čemuž organismy a senzory výrazně vizuálně vystupují.  
 - Ohraničení misky (skleněný lem) funguje jako fyzická bariéra: **uvnitř misky není ani zelená mlha, ani tečky/bubliny** (ty zůstávají na stole vně misek).  
-- Přehled **EKOSYSTÉM** (census) je trvale zobrazen vpravo vedle misky, zvětšený o 50 %, bez rámečku a pozadí (čistá plovoucí typografie). Je pevně svázán s miskou (pohybuje se 1:1 s ní bez odskakování u horního okraje) a rozestup mezi názvy a hodnotami je čistě relativní vůči měřítku světa, takže se při zoomování nemění. Tlačítko `i` bylo zrušeno.  
-- Hlavička misky: border a pozadí odstraněny (ikony a čas plují volně nad miskou). Vlevo v hlavičce je tlačítko pro nastavení misky (ikona ozubeného kola).  
+- Přehled **EKOSYSTÉM** (census) je trvale zobrazen vpravo vedle misky, zvětšený o 50 %, bez rámečku a pozadí (čistá plovoucí typografie). Je pevně svázán s miskou (pohybuje se 1:1 s ní bez odskakování u horního okraje) a rozestup mezi názvy a hodnotami je čistě relativní vůči měřítku světa. Čas simulace byl přesunut z hlavičky přímo vedle nadpisu EKOSYSTÉM.  
+- Hlavička misky: border a pozadí odstraněny; tlačítka (nastavení misky, pauza, rychlost, uložení) jsou vycentrovaná nad středem misky, zvětšená a s většími mezerami mezi sebou.  
+- Spodní lišta na stole: obsahuje 3 tlačítka (*Jedinec*, *Krmítko*, *Přidat misku*). Tlačítko nastavení dole na stole bylo zrušeno (nastavení se otevírá ozubeným kolem v hlavičce misky).  
 - Chrome: flat dark panels (`CHROME_FILL` / `CHROME_EDGE`) pro modály, inspect: Info + Genom taby.
 
 ---
