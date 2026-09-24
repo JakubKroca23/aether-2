@@ -1,0 +1,21 @@
+---
+description: Aether project long-term context — read docs/MEMORY.md and keep sim/view split
+alwaysApply: true
+---
+
+# Aether project rule
+
+Before non-trivial edits, consult:
+
+- `docs/MEMORY.md` (design decisions, lobby/logo invariants)
+- `docs/SPEC.md` when changing gameplay contracts
+- `AGENTS.md` for agent workflow
+
+## Hard invariants
+
+- Keep simulation (`lib` modules) free of Macroquad.
+- Put balance constants in `src/tune.rs`.
+- Lobby backdrop must fill the full window (no black letterbox from `dish_fit_rect`).
+- Organisms are controlled only by genome-derived neural nets — no scripted behavior FSMs.
+- UI copy is Czech.
+- Update `docs/MEMORY.md` when you change lasting design decisions.
