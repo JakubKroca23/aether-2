@@ -10,23 +10,11 @@ use crate::gfx::Gfx;
 
 const FONT_PATH: &str = "/usr/share/fonts/opentype/fira/FiraSans-Medium.otf";
 const LOGO_FONT_PATH: &str = "/usr/share/fonts/opentype/fira/FiraSans-Heavy.otf";
-const DISH_FIT_PAD: f32 = 12.0;
 /// Bottom tool dock stays screen-fixed; dish chrome is in world units below.
 const TOOL: f32 = 84.0;
 
-// Dish-attached chrome in **world units** (scales with camera zoom).
-const W_HEADER_H: f32 = 0.16;
-const W_HEADER_GAP: f32 = 0.028;
-const W_ICON: f32 = 0.115;
-const W_GAP: f32 = 0.045;
-const W_SIDE_GAP: f32 = 0.04;
-const W_CENSUS: f32 = 0.68;
-const W_SPEED_OPT_W: f32 = 0.125;
-const W_SPEED_OPT_H: f32 = 0.078;
-const W_SPEED_OPT_GAP: f32 = 0.012;
 const W_LIFE_BTN_W: f32 = 0.52;
 const W_LIFE_BTN_H: f32 = 0.11;
-/// Dish corner radius in world units (clamped to a fraction of each half-extent).
 const W_DISH_CORNER: f32 = 0.18;
 /// Shared flat chrome panel fill (header + census).
 const CHROME_FILL: Color = Color::new(0.02, 0.05, 0.07, 0.92);
@@ -284,6 +272,8 @@ pub async fn run() {
             if tr.start_seed.is_some() && tr.t >= 0.38 {
                 if let Some(seed) = tr.start_seed.take() {
                     world = World::new_with(seed, boot.population, boot.start_food);
+                    let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
+                    world.set_dish_bounds(aspect, 1.0);
                     boot.apply(&mut world);
                 }
             }
@@ -666,7 +656,8 @@ pub async fn run() {
         }
 
 
-        // Dish size is fixed in world units — never reshape from window aspect.
+        let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
+        world.set_dish_bounds(aspect, 1.0);
         if shot && world.time() < 18.0 {
             let (tx, ty) = world.table_bounds();
             reset_cam_to_dish(&mut home, &mut cam, &frame, tx, ty);
@@ -1594,7 +1585,6 @@ pub async fn run() {
             );
         }
         draw_edge_zones(&frame, &cam, hx, hy, world.edges());
-        draw_extra_dishes_and_tubes(&frame, &cam, &world);
         draw_feeders(
             &frame,
             &cam,
@@ -1755,14 +1745,6 @@ pub async fn run() {
             feed_kind,
             tool_hovers.food,
         );
-        draw_dish_button(&frame, &font, mouse, dish_tool, tool_hovers.dish);
-        if dish_tool {
-            if let Some(p) = screen_to_world(&frame, &cam, mouse.0, mouse.1) {
-                let (phx, phy) = world.bounds();
-                let ok = world.can_place_dish(p);
-                draw_dish_ghost(&frame, &cam, p, phx, phy, ok);
-            }
-        }
         if settings_open {
             draw_settings_menu(
                 &frame,
@@ -2133,23 +2115,18 @@ struct ControlBar {
     speed: (f32, f32, f32, f32),
     speed_options: [(f32, f32, f32, f32); 9],
     /// Pixels per world unit — for font / stroke scaling.
+    #[allow(dead_code)]
     s: f32,
 }
 
-/// Screen region for the dish viewport (bottom tools stay fixed on screen).
+/// Screen region for the dish viewport (full window).
+#[allow(dead_code)]
 fn dish_fit_rect(frame: &Frame) -> (f32, f32, f32, f32) {
-    let left = DISH_FIT_PAD;
-    let top = 56.0;
-    let right_pad = DISH_FIT_PAD;
-    let bottom_pad = TOOL + 36.0;
-    let w = (frame.sw - left - right_pad).max(80.0);
-    let h = (frame.sh - top - bottom_pad).max(80.0);
-    (left, top, w, h)
+    (0.0, 0.0, frame.sw, frame.sh)
 }
 
 fn view_origin(frame: &Frame) -> (f32, f32) {
-    let (x, y, w, h) = dish_fit_rect(frame);
-    (x + w * 0.5, y + h * 0.5)
+    (frame.sw * 0.5, frame.sh * 0.5)
 }
 
 fn px(world: f32, s: f32) -> f32 {
@@ -2195,40 +2172,32 @@ fn stroke_round_rect(x: f32, y: f32, w: f32, h: f32, radius: f32, thickness: f32
 
 fn control_bar_layout(
     frame: &Frame,
-    cam: &Cam,
-    center: Vec2,
-    half_x: f32,
-    half_y: f32,
+    _cam: &Cam,
+    _center: Vec2,
+    _half_x: f32,
+    _half_y: f32,
     speed_open: bool,
 ) -> ControlBar {
-    let _ = half_y;
-    let s = world_scale(frame, cam).max(1e-3);
-    let (dx, dy, dw, _dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
-    let pill_h = px(W_HEADER_H, s);
-    let icon = px(W_ICON, s);
-    let gap = px(W_GAP, s);
-    let header_gap = px(W_HEADER_GAP, s);
-    let w = dw.max(pill_h);
-    let h = pill_h;
-    let x = dx;
-    let y = dy - header_gap - h;
-    let bar = (x, y, w, h);
-    let iy = y + (h - icon) * 0.5;
-
+    let icon = 36.0;
+    let gap = 12.0;
     let total_btns = 4.0 * icon + 3.0 * gap;
-    let bx0 = x + (w - total_btns) * 0.5;
-    let settings = (bx0, iy, icon, icon);
-    let pause = (bx0 + 1.0 * (icon + gap), iy, icon, icon);
-    let speed = (bx0 + 2.0 * (icon + gap), iy, icon, icon);
-    let saves = (bx0 + 3.0 * (icon + gap), iy, icon, icon);
+    let cx = frame.sw * 0.5;
+    let bx0 = cx - total_btns * 0.5;
+    let y = 16.0;
+    let bar_pad = 6.0;
+    let bar = (bx0 - bar_pad, y - bar_pad * 0.5, total_btns + bar_pad * 2.0, icon + bar_pad);
+    let settings = (bx0, y, icon, icon);
+    let pause = (bx0 + 1.0 * (icon + gap), y, icon, icon);
+    let speed = (bx0 + 2.0 * (icon + gap), y, icon, icon);
+    let saves = (bx0 + 3.0 * (icon + gap), y, icon, icon);
     let mut speed_options = [(0.0, 0.0, 0.0, 0.0); 9];
     if speed_open {
-        let ow = px(W_SPEED_OPT_W, s);
-        let oh = px(W_SPEED_OPT_H, s);
-        let og = px(W_SPEED_OPT_GAP, s);
+        let ow = 36.0;
+        let oh = 26.0;
+        let og = 4.0;
         let total = 9.0 * ow + 8.0 * og;
-        let x0 = x + (w - total) * 0.5;
-        let oy = y + h + px(0.02, s);
+        let x0 = cx - total * 0.5;
+        let oy = y + icon + 10.0;
         for i in 0..9 {
             speed_options[i] = (x0 + i as f32 * (ow + og), oy, ow, oh);
         }
@@ -2240,31 +2209,25 @@ fn control_bar_layout(
         saves,
         speed,
         speed_options,
-        s,
+        s: 1.0,
     }
 }
 
 fn census_rect(
-    frame: &Frame,
-    cam: &Cam,
-    center: Vec2,
-    half_x: f32,
-    half_y: f32,
+    _frame: &Frame,
+    _cam: &Cam,
+    _center: Vec2,
+    _half_x: f32,
+    _half_y: f32,
     open: bool,
 ) -> (f32, f32, f32, f32) {
     if !open {
         return (0.0, 0.0, 0.0, 0.0);
     }
-    let s = world_scale(frame, cam).max(1e-3);
-    let (dx, dy, dw, _dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
-    let w = px(W_CENSUS, s);
-    let gap = px(W_SIDE_GAP, s);
-    let title_fs = px(0.042 * 1.5, s).clamp(16.0, 54.0);
-    let row_h = px(0.052 * 1.5, s).clamp(16.0, 56.0);
-    // 1 title + 13 body rows — enlarged by 50%.
-    let h = title_fs + row_h * 1.1 + 13.0 * row_h;
-    let x = dx + dw + gap;
-    let y = dy;
+    let x = 24.0;
+    let y = 20.0;
+    let w = 240.0;
+    let h = 370.0;
     (x, y, w, h)
 }
 
@@ -2276,12 +2239,12 @@ fn food_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
     bottom_tool_slot(frame, 1)
 }
 
-fn dish_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
-    bottom_tool_slot(frame, 2)
+fn dish_button_rect(_frame: &Frame) -> (f32, f32, f32, f32) {
+    (0.0, 0.0, 0.0, 0.0)
 }
 
 fn bottom_tool_slot(frame: &Frame, slot: usize) -> (f32, f32, f32, f32) {
-    let count = 3usize;
+    let count = 2usize;
     let gap = 20.0;
     let total = count as f32 * TOOL + (count - 1) as f32 * gap;
     let x0 = frame.sw * 0.5 - total * 0.5;
@@ -2369,13 +2332,13 @@ fn draw_speed_menu(
     speed: u32,
     open: bool,
     ui: &SpeedMenu,
-    bar: &ControlBar,
+    _bar: &ControlBar,
     hover_t: f32,
 ) {
     let _ = frame;
     let (x, y, w, h) = ui.main;
     let (_hot, cx, cy, ink) = paint_header_icon(x, y, w, h, mouse, open, hover_t);
-    let speed_scale = (px(0.04, bar.s) / 14.0).clamp(0.6, 2.0);
+    let speed_scale = 1.0;
     center_text_scaled(
         font,
         speed_label(speed),
@@ -2573,12 +2536,19 @@ fn draw_census(
     if !open {
         return;
     }
-    let s = world_scale(frame, cam).max(1e-3);
     let c = world.census();
-    let (x, y, _w, _h) = census_rect(frame, cam, center, half_x, half_y, true);
-    let title_scale = (px(0.042 * 1.5, s) / BASE_CHROME_TITLE_FS as f32).clamp(0.65, 2.2);
-    let row_scale = (px(0.036 * 1.5, s) / BASE_CHROME_ROW_FS as f32).clamp(0.65, 2.2);
-    let row_h = px(0.052 * 1.5, s).clamp(16.0, 56.0);
+    let (x, y, w, h) = census_rect(frame, cam, center, half_x, half_y, true);
+    fill_round_rect(
+        x - 10.0,
+        y - 8.0,
+        w,
+        h,
+        8.0,
+        Color::new(0.01, 0.03, 0.05, 0.45),
+    );
+    let title_scale = 1.0;
+    let row_scale = 1.0;
+    let row_h = 24.0;
     let mins = (world.time() / 60.0).floor() as u32;
     let secs = (world.time() % 60.0).floor() as u32;
     let time_str = if mins >= 60 {
@@ -2602,18 +2572,17 @@ fn draw_census(
         ("Ø neurony", format!("{:.0}", c.mean_neurons), false),
         ("Ø synapse", format!("{:.0}", c.mean_synapses), false),
     ];
-    // Background and border removed: typography floats seamlessly on the right side of dish.
     let ink = Color::new(0.9, 0.96, 0.97, 0.95);
     let dim = Color::new(0.62, 0.8, 0.84, 0.85);
     let gold = Color::new(0.40, 0.95, 0.85, 0.98);
     let time_col = Color::new(0.70, 0.95, 0.92, 0.95);
     let mut yy = y + BASE_CHROME_TITLE_FS as f32 * title_scale;
-    let value_x = x + px(0.36, s).clamp(140.0, 480.0);
+    let value_x = x + 140.0;
     for (i, (label, value, header)) in lines.iter().enumerate() {
         if *header {
             text_scaled(font, label, x, yy, BASE_CHROME_TITLE_FS, title_scale, gold);
             text_scaled(font, value, value_x, yy, BASE_CHROME_TITLE_FS, title_scale, time_col);
-            yy += row_h * 1.1;
+            yy += row_h * 1.2;
             continue;
         }
         text_scaled(font, label, x, yy, BASE_CHROME_ROW_FS, row_scale, dim);
@@ -2889,26 +2858,14 @@ fn paint_table_backdrop(
     gfx: Option<&Gfx>,
     frame: &Frame,
     cam: &Cam,
-    table_hx: f32,
-    table_hy: f32,
+    _table_hx: f32,
+    _table_hy: f32,
     time: f32,
-    dishes: &[PetriDish],
+    _dishes: &[PetriDish],
 ) {
     let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
-    let scale = world_scale(frame, cam);
-    let mut dish_uvs: Vec<[f32; 4]> = Vec::new();
-    let mut dish_corner_uv = 0.0f32;
-    for dish in dishes.iter().take(4) {
-        let (min_x, min_y, dw, dh) = dish_screen_rect_at(frame, cam, dish.pos, dish.half_x, dish.half_y);
-        let corner = px(W_DISH_CORNER.min(dish.half_x * 0.4).min(dish.half_y * 0.4), scale);
-        dish_uvs.push([
-            min_x / frame.sw.max(1.0),
-            min_y / frame.sh.max(1.0),
-            (min_x + dw) / frame.sw.max(1.0),
-            (min_y + dh) / frame.sh.max(1.0),
-        ]);
-        dish_corner_uv = corner / frame.sh.max(1.0);
-    }
+    let dish_uvs = vec![[0.0, 0.0, 1.0, 1.0]];
+    let dish_corner_uv = 0.0;
 
     if let Some(g) = gfx {
         g.draw_water(
@@ -2926,99 +2883,23 @@ fn paint_table_backdrop(
         );
     } else {
         let (vhx, vhy) = visible_world_half(frame, cam);
-        let hx = (table_hx + cam.center.x.abs() + 1.5).max(vhx + 0.85);
-        let hy = (table_hy + cam.center.y.abs() + 1.5).max(vhy + 0.85);
-        draw_liquid_bg(frame, cam, hx, hy, time, None, dishes);
+        draw_liquid_bg(frame, cam, vhx, vhy, time, None, &[]);
     }
 }
 
-/// Dish boundary — visually part of the background, with glass rim barrier holding back the surrounding green fog.
+/// Dish boundary — subtle laboratory glass rim along window edges.
 fn paint_dish_cutout(
     frame: &Frame,
-    cam: &Cam,
-    center: Vec2,
-    half_x: f32,
-    half_y: f32,
+    _cam: &Cam,
+    _center: Vec2,
+    _half_x: f32,
+    _half_y: f32,
     _time: f32,
-    hover: f32,
+    _hover: f32,
 ) {
-    let (min_x, min_y, dw, dh) = dish_screen_rect_at(frame, cam, center, half_x, half_y);
-    let scale = world_scale(frame, cam);
-    let corner = px(
-        W_DISH_CORNER.min(half_x * 0.4).min(half_y * 0.4),
-        scale,
-    );
-    let hover = smoother(hover.clamp(0.0, 1.0));
-
-    // Outer glass wall rim highlight / glow — the physical barrier holding back the green fog
-    let rim = (px(0.005, scale)).max(1.4);
-    let rim_a = 0.45 + 0.40 * hover;
-
-    // Soft glass refraction halo at the boundary
-    stroke_round_rect(
-        min_x - rim * 0.6,
-        min_y - rim * 0.6,
-        dw + rim * 1.2,
-        dh + rim * 1.2,
-        corner + rim * 0.6,
-        rim * 1.6,
-        Color::new(0.12, 0.45, 0.40, 0.20 + 0.15 * hover),
-    );
-
-    // Outer edge of the glass wall
-    stroke_round_rect(
-        min_x - rim * 0.25,
-        min_y - rim * 0.25,
-        dw + rim * 0.5,
-        dh + rim * 0.5,
-        corner + rim * 0.25,
-        rim * 0.8,
-        Color::new(0.25, 0.70, 0.65, 0.35 + 0.25 * hover),
-    );
-
-    // Inner bright specular rim of the glass container
-    stroke_round_rect(
-        min_x,
-        min_y,
-        dw,
-        dh,
-        corner,
-        rim,
-        Color::new(0.60 + 0.25 * hover, 0.95, 0.92, rim_a),
-    );
-
-    // Dark glass petri dish base — dark tinted glass letting through minimum of background
-    fill_round_rect(
-        min_x,
-        min_y,
-        dw,
-        dh,
-        corner,
-        Color::new(0.008, 0.020, 0.026, 0.91),
-    );
-
-    // Faint inner rim reflection of dark glass
-    stroke_round_rect(
-        min_x + rim * 0.8,
-        min_y + rim * 0.8,
-        (dw - rim * 1.6).max(1.0),
-        (dh - rim * 1.6).max(1.0),
-        (corner - rim * 0.8).max(0.0),
-        rim * 0.8,
-        Color::new(0.18, 0.50, 0.48, 0.16 + 0.10 * hover),
-    );
-
-    if hover > 0.02 {
-        stroke_round_rect(
-            min_x - px(0.01, scale),
-            min_y - px(0.01, scale),
-            dw + px(0.02, scale),
-            dh + px(0.02, scale),
-            corner + px(0.01, scale),
-            (px(0.008, scale)).max(1.5),
-            Color::new(0.4, 0.95, 0.88, 0.25 * hover),
-        );
-    }
+    let rim = 2.0;
+    draw_rectangle_lines(0.0, 0.0, frame.sw, frame.sh, rim * 2.0, Color::new(0.12, 0.45, 0.40, 0.35));
+    draw_rectangle_lines(rim, rim, frame.sw - rim * 2.0, frame.sh - rim * 2.0, 1.0, Color::new(0.60, 0.95, 0.92, 0.40));
 }
 
 fn paint_food_glow(
@@ -3720,6 +3601,7 @@ fn draw_food_button(
     tool_label(font, "Krmítko", x, y, w, h, lit);
 }
 
+#[allow(dead_code)]
 fn draw_dish_button(
     frame: &Frame,
     font: &Option<Font>,
@@ -3749,6 +3631,7 @@ fn draw_dish_button(
     tool_label(font, "Přidat misku", x, y, w, h, lit);
 }
 
+#[allow(dead_code)]
 fn draw_dish_ghost(
     frame: &Frame,
     cam: &Cam,
@@ -4133,6 +4016,7 @@ fn draw_edge_zones(frame: &Frame, cam: &Cam, half_x: f32, half_y: f32, edges: [E
     }
 }
 
+#[allow(dead_code)]
 fn draw_extra_dishes_and_tubes(frame: &Frame, cam: &Cam, world: &World) {
     // Dish rims come from paint_dish_cutout; only tubes here.
     for tube in world.tubes() {
@@ -4919,24 +4803,23 @@ fn draw_inspect_left(
 
 fn visible_world_half(frame: &Frame, cam: &Cam) -> (f32, f32) {
     let s = world_scale(frame, cam).max(1e-4);
-    let (_x, _y, vw, vh) = dish_fit_rect(frame);
-    (vw * 0.5 / s, vh * 0.5 / s)
+    (frame.sw * 0.5 / s, frame.sh * 0.5 / s)
 }
 
 fn clamp_cam(cam: &mut Cam, frame: &Frame, half_x: f32, half_y: f32) {
-    cam.zoom = cam.zoom.clamp(0.04, 48.0);
+    cam.zoom = cam.zoom.clamp(1.0, 24.0);
     let (vhx, vhy) = visible_world_half(frame, cam);
-    // Free roam across the table — keep a wide soft bound so the board never vanishes.
-    let pad = 12.0_f32.max(vhx * 0.85).max(vhy * 0.85);
-    let max_cx = half_x + pad;
-    let max_cy = half_y + pad;
+    let max_cx = (half_x - vhx).max(0.0);
+    let max_cy = (half_y - vhy).max(0.0);
     cam.center.x = cam.center.x.clamp(-max_cx, max_cx);
     cam.center.y = cam.center.y.clamp(-max_cy, max_cy);
 }
 
-fn reset_cam_to_dish(home: &mut Cam, cam: &mut Cam, frame: &Frame, half_x: f32, half_y: f32) {
-    // Land on the table overview (dishes as cutout objects).
-    *home = cam_for_table(frame, half_x, half_y);
+fn reset_cam_to_dish(home: &mut Cam, cam: &mut Cam, _frame: &Frame, _half_x: f32, _half_y: f32) {
+    *home = Cam {
+        center: Vec2::ZERO,
+        zoom: 1.0,
+    };
     *cam = *home;
 }
 
@@ -4945,20 +4828,16 @@ fn clear_cam_coast(pan_coast: &mut Vec2, zoom_coast: &mut f32) {
     *zoom_coast = 0.0;
 }
 
-fn fit_table_zoom(frame: &Frame, half_x: f32, half_y: f32) -> f32 {
-    let (_x, _y, vw, vh) = dish_fit_rect(frame);
-    let margin = 0.82;
-    let unit = frame.sw.min(frame.sh).max(1.0) * 0.5;
-    let pad = 0.35;
-    let zx = (vw * margin * 0.5) / ((half_x + pad).max(0.1) * unit);
-    let zy = (vh * margin * 0.5) / ((half_y + pad).max(0.1) * unit);
-    zx.min(zy).clamp(0.06, 6.0)
+#[allow(dead_code)]
+fn fit_table_zoom(_frame: &Frame, _half_x: f32, _half_y: f32) -> f32 {
+    1.0
 }
 
-fn cam_for_table(frame: &Frame, table_hx: f32, table_hy: f32) -> Cam {
+#[allow(dead_code)]
+fn cam_for_table(_frame: &Frame, _table_hx: f32, _table_hy: f32) -> Cam {
     Cam {
         center: Vec2::ZERO,
-        zoom: fit_table_zoom(frame, table_hx, table_hy),
+        zoom: 1.0,
     }
 }
 
@@ -7973,8 +7852,7 @@ fn center_text_scaled(
 }
 
 fn world_scale(frame: &Frame, cam: &Cam) -> f32 {
-    // Shorter window side → dish keeps aspect and doesn't stretch with window shape.
-    frame.sw.min(frame.sh) * 0.5 * cam.zoom
+    frame.sh * 0.5 * cam.zoom
 }
 
 fn draw_energy_bar(frame: &Frame, cam: &Cam, font: &Option<Font>, app: &Appearance<'_>) {

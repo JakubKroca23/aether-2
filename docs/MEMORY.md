@@ -124,6 +124,7 @@
 | Dish & mlha | Miska je součástí pozadí; ohraničení nepustí okolní zelenou mlhu dovnitř |
 | Vnitřek misky | Uvnitř misky není mlha ani tečky (čistá tekutina); vně zůstávají |
 | EKOSYSTÉM & header | Trvalý census vpravo od misky (+50 %, bez karty); hlavička bez boxu, vlevo nastavení |
+| Maximalizovaná miska | Stůl smazán; miska je fullscreen (okraje misky = okraje okna); ekosystém vlevo nahoře, ovládací prvky nahoře uprostřed; 2 nástroje dole |
 
 ---
 

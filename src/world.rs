@@ -448,6 +448,10 @@ impl World {
         &mut self.dishes[0]
     }
 
+    pub fn set_dish_bounds(&mut self, half_x: f32, half_y: f32) {
+        self.primary_mut().set_bounds(half_x, half_y);
+    }
+
     #[cfg(test)]
     fn foods_mut(&mut self) -> &mut Vec<Food> {
         &mut self.primary_mut().foods
@@ -1270,8 +1274,8 @@ impl World {
     fn random_point_in(&mut self, dish_id: u32, extent: f32) -> Option<Vec2> {
         let di = self.dish_index(dish_id)?;
         let dish = &self.dishes[di];
-        let x = extent.min(dish.half_x - 0.05).max(0.05);
-        let y = extent.min(dish.half_y - 0.05).max(0.05);
+        let x = (dish.half_x * extent).clamp(0.05, (dish.half_x - 0.05).max(0.05));
+        let y = (dish.half_y * extent).clamp(0.05, (dish.half_y - 0.05).max(0.05));
         Some(Vec2::new(
             self.rng.gen_range(-x..x),
             self.rng.gen_range(-y..y),
