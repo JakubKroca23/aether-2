@@ -16,6 +16,6 @@ Before non-trivial edits, consult:
 - Keep simulation (`lib` modules) free of Macroquad.
 - Put balance constants in `src/tune.rs`.
 - Lobby backdrop must fill the full window (no black letterbox from `dish_fit_rect`).
-- Organisms are controlled only by genome-derived neural nets — no scripted behavior FSMs.
+- Organisms are controlled by genome-derived neural nets — no scripted behavior FSMs. The only hardcoded drive is species survival (mouth + hungry food approach).
 - UI copy is Czech.
 - Update `docs/MEMORY.md` when you change lasting design decisions.

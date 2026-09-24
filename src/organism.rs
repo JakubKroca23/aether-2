@@ -6,7 +6,7 @@ use crate::genome::{
     Genome, ACT_EMIT_PHEROMONE, ACT_ENZYME, ACT_GROWTH, ACT_KILL_FORWARD, ACT_MOVE_EAST,
     ACT_MOVE_FORWARD, ACT_MOVE_NORTH, ACT_MOVE_RANDOM, ACT_MOVE_SOUTH, ACT_MOVE_WEST, ACT_MOVE_X,
     ACT_MOVE_Y, ACT_REPRODUCE, ACT_SET_OSCILLATOR, ACT_SET_RESPONSIVENESS, SENSE_FOOD,
-    SENSE_FOOD_KINDS,
+    SENSE_FOOD_FWD, SENSE_FOOD_KINDS, SENSE_FOOD_SIDE,
 };
 use crate::math::Vec2;
 use crate::tune::*;
@@ -236,7 +236,7 @@ impl Organism {
             && self.repro_cd <= 0.0
     }
 
-    pub fn think(&mut self, inputs: &[f32], food_aim: Vec2, half_x: f32, half_y: f32, dt: f32) {
+    pub fn think(&mut self, inputs: &[f32], dt: f32) {
         self.sense_novelty(inputs, dt);
         self.brain.step(inputs, self.responsiveness);
         let mut outs = [0.0f32; 32];
@@ -261,6 +261,7 @@ impl Organism {
         }
         let taste = self.food_taste[best_kind].clamp(-1.0, 1.0);
         let hunger = self.hunger().clamp(0.0, 1.4);
+        // Survival restlessness: hunger speeds wander and adds undirected search when starving.
         self.wander =
             (self.wander + dt * (0.8 + at(ACT_MOVE_RANDOM).max(0.0) + hunger * 0.55)).fract();
         let ang = self.wander * std::f32::consts::TAU;
@@ -270,25 +271,25 @@ impl Organism {
         let mut drive = Vec2::new(at(ACT_MOVE_X) + east, at(ACT_MOVE_Y) + north)
             + axis * at(ACT_MOVE_FORWARD)
             + wander;
+        // Species-survival floor: hungry + pleasant smell nearby → commit toward food.
+        // Well-fed / no scent: motion is entirely from the net.
+        let food_fwd = (inputs.get(SENSE_FOOD_FWD).copied().unwrap_or(0.5) - 0.5) * 2.0;
+        let food_side = (inputs.get(SENSE_FOOD_SIDE).copied().unwrap_or(0.5) - 0.5) * 2.0;
+        let local_food = axis * food_fwd + side * food_side;
+        let urgency = (hunger * smell).clamp(0.0, 1.0);
+        if urgency > 0.08 && taste > 0.05 {
+            let flen = local_food.length();
+            let toward = if flen > 1e-4 {
+                local_food * (1.0 / flen)
+            } else {
+                Vec2::ZERO
+            };
+            let blend = (0.45 + 0.5 * urgency).clamp(0.0, 0.94);
+            drive = drive * (1.0 - blend) + toward * (blend * (1.1 + 0.5 * smell));
+            drive += Vec2::new(ang.cos(), ang.sin()) * (1.0 - smell) * urgency * 0.3;
+        }
         if drive.length() > 1.25 {
             drive = drive.normalized() * 1.25;
-        }
-        // Chemotaxis follows smell; taste memory (after eating) can flip approach into flee.
-        let urge = 1.2 + hunger * 1.6;
-        drive += food_aim * urge;
-        // Hungry and no scent → leave the walls and keep searching.
-        let lost = (hunger * (1.0 - smell)).clamp(0.0, 1.0);
-        if lost > 0.08 {
-            let mid = self.centroid();
-            let nx = mid.x / half_x.max(1e-3);
-            let ny = mid.y / half_y.max(1e-3);
-            let edge = ((nx.abs().max(ny.abs()) - 0.42) / 0.58).clamp(0.0, 1.0);
-            let inward = Vec2::new(-nx, -ny);
-            let ilen = inward.length();
-            if ilen > 1e-4 {
-                drive += inward * (1.0 / ilen) * edge * lost * 1.25;
-            }
-            drive += Vec2::new(ang.cos(), ang.sin()) * lost * 0.85;
         }
         let vigor = (self.responsiveness * (1.0 + 0.35 * self.tonic)).clamp(0.55, 1.8);
         let aimed = drive * vigor * 1.55;
@@ -304,8 +305,8 @@ impl Organism {
         } else {
             0.0
         };
-        // Open mouth for food that still tastes acceptable; refuse known poison.
-        // Taste starts ~0.28; scale so strong smell can clear MOUTH_OPEN (0.4).
+        // Sole hardcoded survival drive: open mouth when hungry near acceptable food.
+        // Steering, flee, attack, enzyme, repro — all from the net.
         let bite_want = if taste > 0.05 {
             let openness = 0.55 + 0.45 * taste.clamp(0.0, 1.0);
             (smell * openness * (0.75 + 0.35 * hunger.min(1.0))).clamp(0.0, 1.0)
@@ -523,6 +524,9 @@ pub struct Senses {
     pub half_y: f32,
     pub food_kinds: [f32; 3],
     pub food_tail: f32,
+    /// Taste-weighted food aim dotted with body axis / side (signed, later mapped to `[0,1]`).
+    pub food_fwd: f32,
+    pub food_side: f32,
     pub pheromone: f32,
     pub kin: [f32; 3],
     pub similar: f32,
@@ -561,6 +565,8 @@ pub fn lay_inputs(org: &Organism, sense: &Senses) -> Vec<f32> {
         .copied()
         .fold(0.0_f32, f32::max);
     inputs.push(signed(food_head - sense.food_tail));
+    inputs.push(signed(sense.food_fwd));
+    inputs.push(signed(sense.food_side));
     inputs.push(unit(sense.kin[0]));
     inputs.push(unit(sense.kin[1]));
     inputs.push(unit(sense.kin[2]));

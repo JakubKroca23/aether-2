@@ -81,6 +81,13 @@ struct ScreenTransit {
     start_seed: Option<u64>,
 }
 
+/// Spread organism/food spawning across frames under the transit veil.
+struct PendingSeed {
+    pop_left: usize,
+    food_left: usize,
+    food_kind_i: usize,
+}
+
 #[derive(Clone)]
 struct BootConfig {
     population: usize,
@@ -141,22 +148,60 @@ pub async fn run() {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(1)
     };
+
+    // Boot splash: glass DNA helix fills with color as assets load (skip for --shot).
+    if !shot {
+        for i in 0..4 {
+            let t = (i as f32 + 1.0) / 12.0;
+            paint_boot_splash(None, t, 1.0);
+            next_frame().await;
+        }
+    }
+
     let mut boot = BootConfig::default();
     let mut world = if shot {
-        World::new_with(seed, 16, 6)
+        World::new_with(seed, 16, 12)
     } else {
         World::new_with(seed, 0, 0)
     };
     boot.apply(&mut world);
+    if !shot {
+        paint_boot_splash(None, 0.22, 1.0);
+        next_frame().await;
+    }
     let font = load_ttf_font(FONT_PATH).await.ok();
+    if !shot {
+        paint_boot_splash(font.as_ref(), 0.42, 1.0);
+        next_frame().await;
+    }
     let logo_font = load_ttf_font(LOGO_FONT_PATH).await.ok();
     let mut gfx = Gfx::try_new();
     if gfx.is_none() {
         eprintln!("aether: custom shaders unavailable, using CPU draw fallback");
     }
+    if !shot {
+        paint_boot_splash(logo_font.as_ref().or(font.as_ref()), 0.62, 1.0);
+        next_frame().await;
+        warm_font_atlas(&font, &logo_font);
+        // Animate fill to full while atlas warms visually.
+        for i in 0..6 {
+            let t = 0.62 + (i as f32 + 1.0) / 6.0 * 0.38;
+            paint_boot_splash(logo_font.as_ref().or(font.as_ref()), t.min(1.0), 1.0);
+            next_frame().await;
+        }
+    }
     let mut audio = AudioHub::boot().await;
     let mut bloom_on = true;
     set_fullscreen(false);
+
+    // Soft fade out of splash into lobby (helix stays full, then dissolves).
+    if !shot {
+        for i in 0..10 {
+            let fade = 1.0 - (i as f32 + 1.0) / 10.0;
+            paint_boot_splash(logo_font.as_ref().or(font.as_ref()), 1.0, fade);
+            next_frame().await;
+        }
+    }
 
     let mut phase = if shot { Phase::Running } else { Phase::Title };
     let mut title_msg: Option<(String, f32)> = None;
@@ -168,7 +213,6 @@ pub async fn run() {
     let mut feed_kind = FoodKind::Green;
     let mut feed_radius: f32 = 0.35;
     let mut selected_feeder: Option<usize> = None;
-    let mut feeder_quick_action: Option<FeederHoverAction> = None;
     let mut food_panel_open = false;
     let mut food_edit: u8 = 0;
     let mut life_setup_open = false;
@@ -226,6 +270,8 @@ pub async fn run() {
     let mut ambience_cursor_vel = (0.0_f32, 0.0_f32);
     let mut ambience_roamers = TitleRoamer::spawn(1280.0, 800.0);
     let mut screen_transit: Option<ScreenTransit> = None;
+    let mut pending_seed: Option<PendingSeed> = None;
+    let mut net_cache: Option<(u64, Net)> = None;
     let mut hover_new = 0.0_f32;
     let mut hover_load = 0.0_f32;
     let mut hover_settings = 0.0_f32;
@@ -271,13 +317,33 @@ pub async fn run() {
             // Spawn while the veil is already dark — hitch is hidden, flip stays instant.
             if tr.start_seed.is_some() && tr.t >= 0.38 {
                 if let Some(seed) = tr.start_seed.take() {
-                    world = World::new_with(seed, boot.population, boot.start_food);
+                    world = World::new_with(seed, 0, 0);
                     let aspect = (frame.sw / frame.sh.max(1.0)).clamp(0.25, 4.0);
                     world.set_dish_bounds(aspect, 1.0);
                     boot.apply(&mut world);
+                    pending_seed = Some(PendingSeed {
+                        pop_left: boot.population,
+                        food_left: boot.start_food,
+                        food_kind_i: 0,
+                    });
                 }
             }
-            if !tr.flipped && tr.t >= 0.5 {
+            // Spread brain builds across frames under the veil.
+            if let Some(job) = pending_seed.as_mut() {
+                const BATCH: usize = 4;
+                let made = world.spawn_boot_organisms(BATCH.min(job.pop_left));
+                job.pop_left = job.pop_left.saturating_sub(made);
+                let food_n = BATCH.min(job.food_left);
+                let fed = world.spawn_boot_food(food_n, job.food_kind_i);
+                job.food_kind_i += fed;
+                job.food_left = job.food_left.saturating_sub(fed);
+                if job.pop_left == 0 && job.food_left == 0 {
+                    pending_seed = None;
+                }
+            }
+            // Hold phase flip until seed batches finish (veil still covers).
+            let seed_ready = pending_seed.is_none();
+            if !tr.flipped && tr.t >= 0.5 && seed_ready {
                 tr.flipped = true;
                 if tr.to == Phase::Running {
                     reset_run_ui(
@@ -323,7 +389,7 @@ pub async fn run() {
                 }
                 phase = tr.to;
             }
-            if tr.t >= 1.0 {
+            if tr.t >= 1.0 && pending_seed.is_none() {
                 screen_transit = None;
                 transit_scale = 1.0;
                 transit_alpha = 1.0;
@@ -707,12 +773,10 @@ pub async fn run() {
             chrome_hy,
             speed_open,
         );
-        let (food_x, food_y, food_w, food_h) = food_button_rect(&frame);
-        let on_food = hit(mouse, food_x, food_y, food_w, food_h);
-        let (dish_x, dish_y, dish_w, dish_h) = dish_button_rect(&frame);
-        let on_dish = hit(mouse, dish_x, dish_y, dish_w, dish_h);
-        let (spawn_x, spawn_y, spawn_w, spawn_h) = spawn_button_rect(&frame);
-        let on_spawn = hit(mouse, spawn_x, spawn_y, spawn_w, spawn_h);
+        let side = side_tools_layout(&frame);
+        let on_spawn = hit_rect(mouse, side.spawn);
+        let on_food = hit_rect(mouse, side.feeder);
+        let on_colony = hit_rect(mouse, side.colony);
         let on_pause = hit_rect(mouse, bar.pause);
         let on_saves_btn = hit_rect(mouse, bar.saves);
         let on_dish_settings = hit_rect(mouse, bar.settings);
@@ -756,15 +820,33 @@ pub async fn run() {
         let on_detail = detail_hit.is_some_and(|r| hit_rect(mouse, r));
         let on_net = net_hit.is_some_and(|r| hit_rect(mouse, r));
         let on_net_detail = net_detail_btn.is_some_and(|r| hit_rect(mouse, r));
-        let on_tools = on_food
-            || on_dish
-            || on_spawn
+        let on_feeder_quick = hit_feeder_quick(
+            &frame,
+            &cam,
+            &world,
+            mouse,
+            selected_feeder,
+            on_food || feed_tool,
+        )
+        .is_some()
+            || feeder_controls_hover(
+                &frame,
+                &cam,
+                &world,
+                mouse,
+                selected_feeder,
+                on_food || feed_tool,
+            );
+        let on_tools = on_spawn
+            || on_food
+            || on_colony
             || on_pause
             || on_saves_btn
             || on_dish_settings
             || on_census
             || on_speed
             || on_life_setup
+            || on_feeder_quick
             || hit_rect(mouse, bar.bar);
         let mut consumed = input_locked;
 
@@ -1039,7 +1121,14 @@ pub async fn run() {
         }
 
         if pressed && !consumed {
-            if let Some(act) = feeder_quick_action.take() {
+            if let Some(act) = hit_feeder_quick(
+                &frame,
+                &cam,
+                &world,
+                mouse,
+                selected_feeder,
+                on_food || feed_tool,
+            ) {
                 match act {
                     FeederHoverAction::Toggle(idx) => {
                         let on = world.feeders().get(idx).map(|f| !f.enabled).unwrap_or(true);
@@ -1059,6 +1148,16 @@ pub async fn run() {
                             world.set_feeder_rate(idx, (f.rate + step).min(10.0));
                             audio.play(Sfx::Ui);
                         }
+                    }
+                    FeederHoverAction::Settings(idx) => {
+                        selected_feeder = Some(idx);
+                        if let Some(f) = world.feeders().get(idx) {
+                            food_edit = f.kind.index() as u8;
+                            feed_kind = f.kind;
+                        }
+                        food_panel_open = true;
+                        feed_tool = false;
+                        audio.play(Sfx::Ui);
                     }
                 }
                 consumed = true;
@@ -1197,6 +1296,16 @@ pub async fn run() {
                 }
             }
         }
+        if pressed && on_spawn && !consumed {
+            audio.play(Sfx::Confirm);
+            let a = world.time();
+            let p = Vec2::new((a * 0.73).sin() * 0.4, (a * 0.51).cos() * 0.4);
+            let _ = world.spawn_at(p);
+            selected_feeder = None;
+            dish_tool = false;
+            feed_tool = false;
+            consumed = true;
+        }
         if pressed && on_food && !consumed {
             feed_tool = !feed_tool;
             audio.play(Sfx::Ui);
@@ -1209,34 +1318,27 @@ pub async fn run() {
                 food_panel_open = false;
                 selected_feeder = None;
                 dish_tool = false;
+                pinned = None;
             } else {
                 food_panel_open = false;
             }
             consumed = true;
         }
-        if pressed && on_dish && !consumed {
-            dish_tool = !dish_tool;
+        if pressed && on_colony && !consumed {
             audio.play(Sfx::Ui);
-            if dish_tool {
-                feed_tool = false;
-                food_panel_open = false;
-                settings_open = false;
-                settings_section = 0;
-                speed_open = false;
-                saves_open = false;
-                save_name_focus = false;
-                selected_feeder = None;
-                pinned = None;
-            }
-            consumed = true;
-        }
-        if pressed && on_spawn && !consumed {
-            audio.play(Sfx::Confirm);
-            let a = world.time();
-            let p = Vec2::new((a * 0.73).sin() * 0.4, (a * 0.51).cos() * 0.4);
-            pinned = Some(world.spawn_at(p));
+            life_setup_open = true;
+            life_setup_dish = Some(world.primary_dish_id());
+            let (hx, hy) = world.bounds();
+            life_hx = hx;
+            life_hy = hy;
+            life_pop = boot.population.max(8).min(96);
+            life_food = boot.start_food.max(6).min(48);
+            pinned = None;
             selected_feeder = None;
+            feed_tool = false;
             dish_tool = false;
+            food_panel_open = false;
+            consumed = true;
         }
 
         let ui_block = on_tools
@@ -1340,11 +1442,18 @@ pub async fn run() {
                             pinned = None;
                             audio.play(Sfx::Ui);
                         } else if let Some(org_id) = world.pick(p) {
-                            world.mutate_organism(org_id);
-                            audio.play(Sfx::Ui);
-                            pinned = None;
-                            selected_feeder = None;
-                            food_panel_open = false;
+                            if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift) {
+                                world.mutate_organism(org_id);
+                                audio.play(Sfx::Ui);
+                                pinned = None;
+                                selected_feeder = None;
+                                food_panel_open = false;
+                            } else {
+                                pinned = Some(org_id);
+                                selected_feeder = None;
+                                food_panel_open = false;
+                                audio.play(Sfx::Ui);
+                            }
                         } else {
                             pinned = None;
                             selected_feeder = None;
@@ -1400,10 +1509,10 @@ pub async fn run() {
             dt,
             0.1,
         );
-        tool_hovers.food = damp(tool_hovers.food, if on_food { 1.0 } else { 0.0 }, dt, 0.1);
+        tool_hovers.food = damp(tool_hovers.food, if on_food || feed_tool { 1.0 } else { 0.0 }, dt, 0.1);
         tool_hovers.dish = damp(
             tool_hovers.dish,
-            if on_dish || dish_tool { 1.0 } else { 0.0 },
+            if on_colony || life_setup_open { 1.0 } else { 0.0 },
             dt,
             0.1,
         );
@@ -1572,22 +1681,10 @@ pub async fn run() {
             );
         }
         draw_edge_zones(&frame, &cam, hx, hy, world.edges());
-        feeder_quick_action = draw_feeders(
-            &frame,
-            &font,
-            &cam,
-            &world,
-            selected_feeder,
-            feed_tool,
-            feed_kind,
-            feed_radius,
-            mouse,
-            on_food,
-            on_tools || on_setup || on_food_panel || on_saves_panel || on_detail || on_net,
-        );
 
-        let sensor_reach = world.food_sensor_reach();
+        let glow_batched = paint_gfx.is_some();
         if let Some(g) = paint_gfx {
+            // One material bind for all soft blobs this frame.
             g.begin_glow();
             for (_dish_id, pos, food) in world.foods_table() {
                 let spec = world.food_spec(food.kind);
@@ -1601,6 +1698,27 @@ pub async fn run() {
                     food.bloom,
                     food.fade,
                 );
+            }
+            for app in &apps {
+                let (hover_t, pin_t) = fade_of(&fades, app.id);
+                paint_organism_glow(
+                    g,
+                    &frame,
+                    &cam,
+                    app,
+                    world.time(),
+                    hover_t.max(pin_t * 0.55),
+                );
+                paint_select_glow_cont(g, &frame, &cam, app, pin_t, world.time());
+            }
+            for spark in world.sparks() {
+                paint_spark_cont(g, &frame, &cam, spark);
+            }
+            for flash in world.flashes() {
+                paint_flash_cont(g, &frame, &cam, flash);
+            }
+            for mote in &motes {
+                paint_mote_cont(g, &frame, &cam, mote);
             }
             g.end_glow();
         } else {
@@ -1620,7 +1738,7 @@ pub async fn run() {
         for app in &apps {
             let (hover_t, pin_t) = fade_of(&fades, app.id);
             paint_organism(
-                paint_gfx,
+                if glow_batched { None } else { paint_gfx },
                 &frame,
                 &cam,
                 &font,
@@ -1628,16 +1746,20 @@ pub async fn run() {
                 world.time(),
                 hover_t.max(pin_t * 0.55),
             );
-            paint_select_glow(paint_gfx, &frame, &cam, app, pin_t, world.time());
+            if !glow_batched {
+                paint_select_glow(paint_gfx, &frame, &cam, app, pin_t, world.time());
+            }
         }
-        for spark in world.sparks() {
-            paint_spark(paint_gfx, &frame, &cam, spark);
-        }
-        for flash in world.flashes() {
-            paint_flash(paint_gfx, &frame, &cam, flash);
-        }
-        for mote in &motes {
-            paint_mote(paint_gfx, &frame, &cam, mote);
+        if !glow_batched {
+            for spark in world.sparks() {
+                paint_spark(paint_gfx, &frame, &cam, spark);
+            }
+            for flash in world.flashes() {
+                paint_flash(paint_gfx, &frame, &cam, flash);
+            }
+            for mote in &motes {
+                paint_mote(paint_gfx, &frame, &cam, mote);
+            }
         }
         if use_shaders {
             if let Some(g) = gfx.as_mut() {
@@ -1653,12 +1775,20 @@ pub async fn run() {
             let (hover_t, _) = fade_of(&fades, app.id);
             draw_hover_ring(&frame, &cam, app, hover_t);
         }
-        // Sense cones outside the bloom pass so they stay readable.
-        for app in &apps {
-            let (hover_t, pin_t) = fade_of(&fades, app.id);
-            let sense_t = (0.55 + 0.45 * pin_t.max(hover_t * 0.55)).clamp(0.55, 1.0);
-            draw_senses(&frame, &cam, app, sense_t, sensor_reach);
-        }
+        // Feeders above food / organisms (world Z order).
+        draw_feeders(
+            &frame,
+            &font,
+            &cam,
+            &world,
+            selected_feeder,
+            feed_tool,
+            feed_kind,
+            feed_radius,
+            mouse,
+            on_food || feed_tool,
+            on_tools || on_setup || on_food_panel || on_saves_panel || on_detail || on_net,
+        );
         draw_center_mini_panel(&font, world.time(), &bar);
         draw_speed_menu(
             &frame,
@@ -1685,7 +1815,15 @@ pub async fn run() {
             census_collapsed,
             on_census_header,
         );
-        draw_spawn_button(&frame, &font, mouse, tool_hovers.spawn);
+        draw_side_tools(
+            &font,
+            mouse,
+            &side,
+            feed_tool,
+            tool_hovers.spawn,
+            tool_hovers.food,
+            world.feeder_count(),
+        );
         if let Some(ui) = life_ui.as_ref() {
             draw_life_setup(
                 &font,
@@ -1712,15 +1850,6 @@ pub async fn run() {
                 world.food_kinds(),
             );
         }
-        draw_food_button(
-            &frame,
-            &font,
-            mouse,
-            food_panel_open || feed_tool,
-            feed_kind,
-            tool_hovers.food,
-            world.feeder_count(),
-        );
         if settings_open {
             draw_settings_menu(
                 &frame,
@@ -1765,11 +1894,19 @@ pub async fn run() {
                     draw_inspect_right(&frame, &font, s, panel_t, detail_tab, mouse);
                 detail_hit = Some(panel);
                 detail_hits = Some(hits);
-                if let Some(net) = world.network(s.id) {
+                // Rebuild topology when pinned id changes; refresh acts each frame.
+                if net_cache.as_ref().map(|(id, _)| *id) != Some(s.id) {
+                    net_cache = world.network(s.id).map(|n| (s.id, n));
+                } else if let Some((_, cached)) = net_cache.as_mut() {
+                    if !world.refresh_net_acts(s.id, cached) {
+                        net_cache = world.network(s.id).map(|n| (s.id, n));
+                    }
+                }
+                if let Some((_, net)) = net_cache.as_ref() {
                     let (panel, detail_btn) = draw_inspect_left(
                         &frame,
                         &font,
-                        &net,
+                        net,
                         panel_t,
                         world.time(),
                         mouse,
@@ -1780,7 +1917,7 @@ pub async fn run() {
                         draw_net_3d_overlay(
                             &frame,
                             &font,
-                            &net,
+                            net,
                             world.time(),
                             net_3d_yaw,
                             net_3d_pitch,
@@ -1800,6 +1937,7 @@ pub async fn run() {
             net_hit = None;
             net_detail_btn = None;
             net_3d_open = false;
+            net_cache = None;
         }
 
         if shot && world.time() >= 18.0 {
@@ -1835,6 +1973,367 @@ fn begin_screen_transit(slot: &mut Option<ScreenTransit>, to: Phase, start_seed:
         flipped: false,
         start_seed,
     });
+}
+
+/// Boot splash: transparent glass DNA double helix that fills with color as `progress` (0‥1).
+/// `alpha` fades the whole screen (used for exit dissolve).
+fn paint_boot_splash(font: Option<&Font>, progress: f32, alpha: f32) {
+    let sw = screen_width();
+    let sh = screen_height();
+    let a = alpha.clamp(0.0, 1.0);
+    let progress = progress.clamp(0.0, 1.0);
+    clear_background(Color::new(0.012, 0.03, 0.04, 1.0));
+    draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.02, 0.055, 0.07, 0.5 * a));
+
+    let cx = sw * 0.5;
+    let cy = sh * 0.46;
+    paint_boot_dna_helix(cx, cy, progress, a);
+
+    let label = "AETHER";
+    let size = 36u16;
+    let w = measure_text(label, font, size, 1.0).width;
+    let x = (sw - w) * 0.5;
+    let y = cy + sh * 0.18;
+    let col = Color::new(0.55, 0.92, 0.90, (0.35 + 0.55 * progress) * a);
+    if let Some(f) = font {
+        draw_text_ex(
+            label,
+            x,
+            y,
+            TextParams {
+                font: Some(f),
+                font_size: size,
+                font_scale: 1.0,
+                color: col,
+                ..Default::default()
+            },
+        );
+    } else {
+        draw_text(label, x, y, size as f32, col);
+    }
+}
+
+/// Horizontal glass double helix: empty rim always visible; color floods left→right with progress.
+fn paint_boot_dna_helix(cx: f32, cy: f32, progress: f32, alpha: f32) {
+    const N: usize = 72;
+    let span = (screen_width() * 0.42).clamp(280.0, 520.0);
+    let amp = 38.0;
+    let turns = 2.35;
+    let time = get_time() as f32;
+    let twist = time * 0.55;
+
+    let mut strand_a = [(0.0_f32, 0.0_f32, 0.0_f32); N];
+    let mut strand_b = [(0.0_f32, 0.0_f32, 0.0_f32); N];
+    for i in 0..N {
+        let t = i as f32 / (N - 1) as f32;
+        let envelope = (t * std::f32::consts::PI).sin().powf(0.65);
+        let phase = t * std::f32::consts::TAU * turns + twist;
+        let axis = (t - 0.5) * span;
+        let r = amp * (0.75 + 0.25 * envelope);
+        let organic = (time * 0.9 + t * 2.8).sin() * 2.2 * envelope;
+        // Mild 3D foreshortening without full logo tilt.
+        let za = phase.cos() * r;
+        let zb = -phase.cos() * r;
+        let persp_a = 1.0 / (1.0 + za * 0.004);
+        let persp_b = 1.0 / (1.0 + zb * 0.004);
+        strand_a[i] = (
+            cx + (axis + organic * 0.12) * persp_a,
+            cy + phase.sin() * r * 0.78 * persp_a,
+            t,
+        );
+        strand_b[i] = (
+            cx + (axis - organic * 0.12) * persp_b,
+            cy - phase.sin() * r * 0.78 * persp_b,
+            t,
+        );
+    }
+
+    let glass = Color::new(0.72, 0.88, 0.92, 0.14 * alpha);
+    let glass_hi = Color::new(0.92, 0.98, 1.0, 0.22 * alpha);
+    let fill_hue = |t: f32| {
+        let phase = t * std::f32::consts::TAU - time * 0.35;
+        let u = 0.5 + 0.5 * phase.sin();
+        hsv(0.42 + u * 0.22, 0.7, 0.92)
+    };
+
+    // Soft glass envelope behind the helix.
+    draw_rectangle(
+        cx - span * 0.55,
+        cy - amp * 1.35,
+        span * 1.1,
+        amp * 2.7,
+        Color::new(0.08, 0.22, 0.28, 0.06 * alpha),
+    );
+
+    // Empty glass strands (full length).
+    for pts in [&strand_a[..], &strand_b[..]] {
+        for w in pts.windows(2) {
+            let (x0, y0, _) = w[0];
+            let (x1, y1, _) = w[1];
+            draw_line(x0, y0, x1, y1, 5.5, glass);
+            draw_line(x0, y0, x1, y1, 2.0, glass_hi);
+        }
+        for &(x, y, _) in pts {
+            draw_circle(x, y, 3.2, glass);
+            draw_circle(x - 0.8, y - 0.7, 1.3, glass_hi);
+        }
+    }
+
+    // Glass rungs (full length, faint).
+    for i in (2..N - 2).step_by(3) {
+        let (x0, y0, _) = strand_a[i];
+        let (x1, y1, _) = strand_b[i];
+        draw_line(x0, y0, x1, y1, 1.4, Color::new(0.75, 0.9, 0.95, 0.1 * alpha));
+    }
+
+    // Color flood left → right.
+    let flood = progress;
+    if flood > 0.001 {
+        for pts in [&strand_a[..], &strand_b[..]] {
+            for w in pts.windows(2) {
+                let (x0, y0, t0) = w[0];
+                let (x1, y1, t1) = w[1];
+                let mid = (t0 + t1) * 0.5;
+                if mid > flood {
+                    continue;
+                }
+                // Soft edge near the fill front.
+                let edge = ((flood - mid) / 0.08).clamp(0.0, 1.0);
+                let (cr, cg, cb) = fill_hue(mid);
+                let fa = edge * alpha;
+                draw_line(
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    6.5,
+                    Color::new(cr, cg, cb, 0.22 * fa),
+                );
+                draw_line(
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    3.2,
+                    Color::new(cr, cg, cb, 0.72 * fa),
+                );
+                draw_line(
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    1.2,
+                    Color::new(
+                        (cr + 0.35).min(1.0),
+                        (cg + 0.35).min(1.0),
+                        (cb + 0.3).min(1.0),
+                        0.55 * fa,
+                    ),
+                );
+            }
+            for &(x, y, t) in pts {
+                if t > flood {
+                    continue;
+                }
+                let edge = ((flood - t) / 0.08).clamp(0.0, 1.0);
+                let (cr, cg, cb) = fill_hue(t);
+                let fa = edge * alpha;
+                draw_circle(x, y, 4.2, Color::new(cr, cg, cb, 0.55 * fa));
+                draw_circle(
+                    x - 0.9,
+                    y - 0.8,
+                    1.6,
+                    Color::new(1.0, 1.0, 1.0, 0.45 * fa),
+                );
+            }
+        }
+
+        for i in (2..N - 2).step_by(3) {
+            let (x0, y0, t0) = strand_a[i];
+            let (x1, y1, t1) = strand_b[i];
+            let mid = (t0 + t1) * 0.5;
+            if mid > flood {
+                continue;
+            }
+            let edge = ((flood - mid) / 0.08).clamp(0.0, 1.0);
+            let (cr, cg, cb) = fill_hue(mid);
+            let fa = edge * alpha;
+            draw_line(x0, y0, x1, y1, 2.2, Color::new(cr, cg, cb, 0.35 * fa));
+            let mx = (x0 + x1) * 0.5;
+            let my = (y0 + y1) * 0.5;
+            draw_circle(mx, my, 2.4, Color::new(cr, cg, cb, 0.5 * fa));
+        }
+
+        // Leading meniscus glow at the fill front.
+        let fi = ((flood * (N - 1) as f32).round() as usize).min(N - 1);
+        let (ax, ay, _) = strand_a[fi];
+        let (bx, by, _) = strand_b[fi];
+        let (cr, cg, cb) = fill_hue(flood);
+        draw_circle(ax, ay, 7.0, Color::new(cr, cg, cb, 0.2 * alpha));
+        draw_circle(bx, by, 7.0, Color::new(cr, cg, cb, 0.2 * alpha));
+        draw_circle(ax, ay, 3.0, Color::new(1.0, 1.0, 1.0, 0.35 * alpha));
+        draw_circle(bx, by, 3.0, Color::new(1.0, 1.0, 1.0, 0.35 * alpha));
+    }
+}
+
+/// Rasterize common UI glyphs once so first-open panels do not hitch.
+fn warm_font_atlas(font: &Option<Font>, logo_font: &Option<Font>) {
+    const SIZES: &[u16] = &[10, 11, 12, 13, 14, 15, 16, 18, 20, BASE_CHROME_TITLE_FS, BASE_CHROME_ROW_FS];
+    const SAMPLES: &[&str] = &[
+        "AETHER",
+        "Jedinec",
+        "Krmítko",
+        "Nová kolonie",
+        "INFO",
+        "NASTAVENÍ",
+        "ULOŽIT",
+        "generace",
+        "0123456789",
+        "áéíóúýžščřďťň",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    ];
+    for size in SIZES {
+        for sample in SAMPLES {
+            let _ = measure_text(sample, font.as_ref(), *size, 1.0);
+            if let Some(f) = font.as_ref() {
+                draw_text_ex(
+                    sample,
+                    -4000.0,
+                    -4000.0,
+                    TextParams {
+                        font: Some(f),
+                        font_size: *size,
+                        font_scale: 1.0,
+                        color: Color::new(0.0, 0.0, 0.0, 0.0),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+    let _ = measure_text("AETHER", logo_font.as_ref(), BASE_LOGO_FS, 1.0);
+    if let Some(f) = logo_font.as_ref() {
+        draw_text_ex(
+            "AETHER",
+            -4000.0,
+            -4000.0,
+            TextParams {
+                font: Some(f),
+                font_size: BASE_LOGO_FS,
+                font_scale: 1.0,
+                color: Color::new(0.0, 0.0, 0.0, 0.0),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+struct SideTools {
+    spawn: (f32, f32, f32, f32),
+    feeder: (f32, f32, f32, f32),
+    colony: (f32, f32, f32, f32),
+}
+
+fn side_tools_layout(frame: &Frame) -> SideTools {
+    let size = 44.0;
+    let gap = 10.0;
+    let x = frame.sw - size - 14.0;
+    let y0 = 14.0;
+    SideTools {
+        spawn: (x, y0, size, size),
+        feeder: (x, y0 + size + gap, size, size),
+        colony: (x, y0 + 2.0 * (size + gap), size, size),
+    }
+}
+
+fn draw_side_tools(
+    font: &Option<Font>,
+    mouse: (f32, f32),
+    side: &SideTools,
+    feed_active: bool,
+    spawn_hover: f32,
+    food_hover: f32,
+    feeder_count: usize,
+) {
+    let rows = [
+        (side.spawn, "Jedinec", false, spawn_hover, 0u8),
+        (side.feeder, "Krmítko", feed_active, food_hover, 1u8),
+        (side.colony, "Kolonie", false, 0.0, 2u8),
+    ];
+    for (rect, label, active, hover_t, kind) in rows {
+        let (x, y, w, h) = rect;
+        let hot = hit_rect(mouse, rect) || active || hover_t > 0.35;
+        // Transparent glass plate — no solid fill.
+        fill_round_rect(
+            x,
+            y,
+            w,
+            h,
+            10.0,
+            Color::new(0.08, 0.18, 0.22, if hot { 0.22 } else { 0.08 }),
+        );
+        stroke_round_rect(
+            x,
+            y,
+            w,
+            h,
+            10.0,
+            if hot { 1.6 } else { 1.1 },
+            Color::new(0.45, 0.92, 0.88, if hot { 0.85 } else { 0.28 }),
+        );
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.42;
+        match kind {
+            0 => draw_side_icon_creature(cx, cy, hot),
+            1 => draw_side_icon_feeder(cx, cy, hot, feeder_count),
+            _ => draw_side_icon_colony(cx, cy, hot),
+        }
+        let caption = if kind == 1 && feeder_count > 0 {
+            format!("{feeder_count}")
+        } else {
+            label.to_string()
+        };
+        center_text(
+            font,
+            &caption,
+            cx,
+            y + h - 6.0,
+            9,
+            Color::new(0.75, 0.92, 0.9, if hot { 0.95 } else { 0.55 }),
+        );
+    }
+}
+
+fn draw_side_icon_creature(cx: f32, cy: f32, hot: bool) {
+    let nodes = [
+        (cx - 7.0, cy + 4.0, 3.6, 0.78),
+        (cx - 0.5, cy + 0.5, 4.2, 0.84),
+        (cx + 6.5, cy - 3.5, 5.0, 0.92),
+    ];
+    let ink = if hot { 1.0 } else { 0.78 };
+    let stroke = if hot { 2.0 } else { 1.5 };
+    for (x, y, r, hue) in nodes {
+        let (cr, cg, cb) = hsv(hue, 0.85, ink);
+        draw_circle_lines(x, y, r, stroke, Color::new(cr, cg, cb, if hot { 1.0 } else { 0.75 }));
+    }
+}
+
+fn draw_side_icon_feeder(cx: f32, cy: f32, hot: bool, _count: usize) {
+    let a = if hot { 1.0 } else { 0.7 };
+    let col = Color::new(0.45, 0.95, 0.75, a);
+    let s = 7.0;
+    stroke_round_rect(cx - s, cy - s, s * 2.0, s * 2.0, 3.5, if hot { 1.8 } else { 1.3 }, col);
+    draw_circle(cx, cy, 3.2, Color::new(0.45, 0.95, 0.75, 0.85 * a));
+    draw_circle(cx - 1.0, cy - 1.0, 1.1, Color::new(1.0, 1.0, 1.0, 0.7 * a));
+}
+
+fn draw_side_icon_colony(cx: f32, cy: f32, hot: bool) {
+    let a = if hot { 1.0 } else { 0.7 };
+    let col = Color::new(0.55, 0.85, 1.0, a);
+    // Three small dots as a mini colony.
+    for (dx, dy, r) in [(-5.5_f32, 2.5, 2.8), (0.0, -3.5, 3.4), (5.5, 2.0, 2.6)] {
+        draw_circle_lines(cx + dx, cy + dy, r, if hot { 1.7 } else { 1.3 }, col);
+    }
 }
 
 /// Logo DNA park / letter dissolve used when returning to the title.
@@ -1982,107 +2481,6 @@ fn fade_of(fades: &[Fade], id: u64) -> (f32, f32) {
         .unwrap_or((0.0, 0.0))
 }
 
-fn draw_senses(frame: &Frame, cam: &Cam, app: &Appearance<'_>, t: f32, sensor_reach: f32) {
-    if app.nodes.is_empty() {
-        return;
-    }
-    let head = app.world_node(0);
-    let tail = app.world_node(app.nodes.len() - 1);
-    let axis = {
-        let d = Vec2::new(head.x - tail.x, head.y - tail.y);
-        let len = d.length();
-        if len < 1e-4 {
-            Vec2::new(1.0, 0.0)
-        } else {
-            Vec2::new(d.x / len, d.y / len)
-        }
-    };
-    let (r, g, b) = hsv(app.hue, 0.75, 1.0);
-    let a = smoother(t.clamp(0.0, 1.0)) * 0.32;
-    let half = 0.95;
-    paint_sense_sector(frame, cam, head, axis, sensor_reach, half, r, g, b, a);
-}
-
-fn paint_sense_sector(
-    frame: &Frame,
-    cam: &Cam,
-    origin: Vec2,
-    dir: Vec2,
-    reach: f32,
-    half: f32,
-    r: f32,
-    g: f32,
-    b: f32,
-    alpha: f32,
-) {
-    if alpha < 0.004 {
-        return;
-    }
-    let base = dir.y.atan2(dir.x);
-    let (ox, oy) = world_to_screen(frame, cam, origin);
-    let layers = 10;
-    let wedges = 18;
-    for layer in (0..layers).rev() {
-        let u0 = layer as f32 / layers as f32;
-        let u1 = (layer + 1) as f32 / layers as f32;
-        let fall = 1.0 - u1;
-        let a = alpha * fall * fall;
-        if a < 0.003 {
-            continue;
-        }
-        let rad0 = reach * u0;
-        let rad1 = reach * u1;
-        for i in 0..wedges {
-            let t0 = i as f32 / wedges as f32;
-            let t1 = (i + 1) as f32 / wedges as f32;
-            let a0 = base - half + 2.0 * half * t0;
-            let a1 = base - half + 2.0 * half * t1;
-            let p00 = world_to_screen(
-                frame,
-                cam,
-                Vec2::new(origin.x + a0.cos() * rad0, origin.y + a0.sin() * rad0),
-            );
-            let p01 = world_to_screen(
-                frame,
-                cam,
-                Vec2::new(origin.x + a1.cos() * rad0, origin.y + a1.sin() * rad0),
-            );
-            let p10 = world_to_screen(
-                frame,
-                cam,
-                Vec2::new(origin.x + a0.cos() * rad1, origin.y + a0.sin() * rad1),
-            );
-            let p11 = world_to_screen(
-                frame,
-                cam,
-                Vec2::new(origin.x + a1.cos() * rad1, origin.y + a1.sin() * rad1),
-            );
-            let col = Color::new(r, g, b, a);
-            if layer == 0 {
-                draw_triangle(
-                    macroquad::math::Vec2::new(ox, oy),
-                    macroquad::math::Vec2::new(p10.0, p10.1),
-                    macroquad::math::Vec2::new(p11.0, p11.1),
-                    col,
-                );
-            } else {
-                draw_triangle(
-                    macroquad::math::Vec2::new(p00.0, p00.1),
-                    macroquad::math::Vec2::new(p10.0, p10.1),
-                    macroquad::math::Vec2::new(p11.0, p11.1),
-                    col,
-                );
-                draw_triangle(
-                    macroquad::math::Vec2::new(p00.0, p00.1),
-                    macroquad::math::Vec2::new(p11.0, p11.1),
-                    macroquad::math::Vec2::new(p01.0, p01.1),
-                    col,
-                );
-            }
-        }
-    }
-}
-
 struct ControlBar {
     bar: (f32, f32, f32, f32),
     time_box: (f32, f32, f32, f32),
@@ -2221,10 +2619,12 @@ fn census_rect(
     (x, y, w, h)
 }
 
+#[allow(dead_code)]
 fn spawn_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
     bottom_tool_slot(frame, 0)
 }
 
+#[allow(dead_code)]
 fn food_button_rect(frame: &Frame) -> (f32, f32, f32, f32) {
     bottom_tool_slot(frame, 1)
 }
@@ -2385,6 +2785,7 @@ fn tool_label(font: &Option<Font>, label: &str, x: f32, y: f32, w: f32, h: f32, 
     );
 }
 
+#[allow(dead_code)]
 fn draw_spawn_button(frame: &Frame, font: &Option<Font>, mouse: (f32, f32), hover_t: f32) {
     let (x, y, w, h) = spawn_button_rect(frame);
     let (hot, cx, cy) =
@@ -2394,6 +2795,7 @@ fn draw_spawn_button(frame: &Frame, font: &Option<Font>, mouse: (f32, f32), hove
     tool_label(font, "Jedinec", x, y, w, h, lit);
 }
 
+#[allow(dead_code)]
 fn draw_creature_icon(cx: f32, cy: f32, hot: bool) {
     let nodes = [
         (cx - 13.0, cy + 7.0, 7.5, 0.78),
@@ -2643,12 +3045,12 @@ fn draw_life_setup(
     let dim = Color::new(0.62, 0.8, 0.84, 0.9);
     center_text(
         font,
-        "Počáteční nastavení",
-        x + w * 0.5,
-        y + 34.0,
-        16,
-        Color::new(0.55, 0.95, 0.88, 0.95),
-    );
+            "Nová kolonie",
+            x + w * 0.5,
+            y + 34.0,
+            16,
+            Color::new(0.55, 0.95, 0.88, 0.95),
+        );
     draw_chip(font, ui.close, "×", false, mouse);
     text(font, "jedinci", ui.pop_minus.0, ui.pop_minus.1 - 4.0, 12, dim);
     draw_stepper(
@@ -2700,7 +3102,7 @@ fn draw_life_setup(
         &format!("{hy:.2}"),
         mouse,
     );
-    draw_chip(font, ui.start, "Založit život", true, mouse);
+    draw_chip(font, ui.start, "Založit kolonii", true, mouse);
 }
 
 #[allow(dead_code)]
@@ -2897,13 +3299,12 @@ fn paint_food_ghost(
     paint_food(gfx, frame, cam, p, sense, color, 1.0, None);
 }
 
-fn paint_organism(
-    gfx: Option<&Gfx>,
+fn paint_organism_glow(
+    g: &Gfx,
     frame: &Frame,
     cam: &Cam,
-    font: &Option<Font>,
     app: &Appearance<'_>,
-    time: f32,
+    _time: f32,
     hover: f32,
 ) {
     if app.nodes.is_empty() {
@@ -2911,15 +3312,14 @@ fn paint_organism(
     }
     let hover = smoother(hover.clamp(0.0, 1.0));
     let s = world_scale(frame, cam);
-    let (cr, cg, cb) = hsv(app.hue, 0.85, 1.0);
+    let (cr, cg, cb) = hsv(app.hue, 0.8, 1.0);
     let energy = (app.energy / 2.0).clamp(0.0, 1.0);
-    let mouth = app.mouth.clamp(0.0, 1.0);
     let pts: Vec<(f32, f32)> = app
         .world_nodes()
         .map(|n| world_to_screen(frame, cam, n))
         .collect();
     let n = pts.len();
-    let base_r = (app.node_radius * s).max(3.2) * (1.0 + 0.14 * hover);
+    let base_r = (app.node_radius * s * 0.68).max(2.2) * (1.0 + 0.1 * hover);
 
     let mut mid_x = 0.0;
     let mut mid_y = 0.0;
@@ -2930,93 +3330,110 @@ fn paint_organism(
     mid_x /= n as f32;
     mid_y /= n as f32;
 
-    // Soft bloom halo (neon tube bleed) — not a filled metaball body.
+    g.soft_blob_cont(
+        mid_x,
+        mid_y,
+        base_r * (1.8 + 0.15 * n as f32),
+        Color::new(cr, cg, cb, 0.05 + 0.04 * energy + 0.06 * hover),
+        2.3,
+        -1.0,
+        0.0,
+    );
+    for (i, &(x, y)) in pts.iter().enumerate() {
+        let fall = 1.0 - i as f32 * (0.5 / n.max(1) as f32);
+        let rad = base_r * if i == 0 { 1.25 } else { 0.95 } * fall.max(0.55);
+        g.soft_blob_cont(
+            x,
+            y,
+            rad * 1.7,
+            Color::new(cr, cg, cb, 0.07 + 0.05 * energy + 0.05 * hover),
+            1.9,
+            -1.0,
+            0.0,
+        );
+    }
+}
+
+fn paint_organism(
+    gfx: Option<&Gfx>,
+    frame: &Frame,
+    cam: &Cam,
+    font: &Option<Font>,
+    app: &Appearance<'_>,
+    _time: f32,
+    hover: f32,
+) {
+    if app.nodes.is_empty() {
+        return;
+    }
+    let hover = smoother(hover.clamp(0.0, 1.0));
+    let s = world_scale(frame, cam);
+    let (cr, cg, cb) = hsv(app.hue, 0.8, 1.0);
+    let energy = (app.energy / 2.0).clamp(0.0, 1.0);
+    let mouth = app.mouth.clamp(0.0, 1.0);
+    let pts: Vec<(f32, f32)> = app
+        .world_nodes()
+        .map(|n| world_to_screen(frame, cam, n))
+        .collect();
+    let n = pts.len();
+    let base_r = (app.node_radius * s * 0.68).max(2.2) * (1.0 + 0.1 * hover);
+
+    let mut mid_x = 0.0;
+    let mut mid_y = 0.0;
+    for &(x, y) in &pts {
+        mid_x += x;
+        mid_y += y;
+    }
+    mid_x /= n as f32;
+    mid_y /= n as f32;
+
     if let Some(g) = gfx {
         g.soft_blob(
             mid_x,
             mid_y,
-            base_r * (2.6 + 0.3 * n as f32 + 0.5 * hover),
-            Color::new(cr, cg, cb, 0.07 + 0.06 * energy + 0.08 * hover),
-            2.2,
+            base_r * (1.8 + 0.15 * n as f32),
+            Color::new(cr, cg, cb, 0.05 + 0.04 * energy + 0.06 * hover),
+            2.3,
             -1.0,
             0.0,
         );
-        for (i, &(x, y)) in pts.iter().enumerate() {
-            let fall = 1.0 - i as f32 * (0.55 / n.max(1) as f32);
-            let head = i == 0;
-            let rad = base_r
-                * if head {
-                    1.45 + 0.2 * mouth
-                } else {
-                    1.1
-                }
-                * fall.max(0.55);
-            let chill = (time * 1.4 + app.id as f32 * 0.17 + i as f32).sin() * 0.5 + 0.5;
-            g.soft_blob(
-                x,
-                y,
-                rad * 2.4,
-                Color::new(cr, cg, cb, 0.1 + 0.08 * energy + 0.08 * hover),
-                1.9,
-                -1.0,
-                0.0,
-            );
-            g.soft_blob(
-                x - 1.4,
-                y,
-                rad * 2.0,
-                Color::new(1.0, 0.25, 0.55, (0.05 + 0.04 * chill) * (0.6 + 0.4 * energy)),
-                1.7,
-                -1.0,
-                0.0,
-            );
-            g.soft_blob(
-                x + 1.4,
-                y,
-                rad * 2.0,
-                Color::new(0.15, 1.0, 0.95, (0.06 + 0.04 * (1.0 - chill)) * (0.6 + 0.4 * energy)),
-                1.7,
-                -1.0,
-                0.0,
-            );
-        }
     } else {
         draw_circle(
             mid_x,
             mid_y,
-            base_r * (2.4 + 0.25 * n as f32 + 0.4 * hover),
-            Color::new(cr, cg, cb, 0.08 + 0.06 * energy + 0.08 * hover),
+            base_r * (1.6 + 0.12 * n as f32),
+            Color::new(cr, cg, cb, 0.06 + 0.04 * energy),
         );
     }
 
-    // Neon tube body: dark fill + bright rim (same language as title creatures).
-    let ink = 0.82 + 0.18 * energy;
+    // Slim spine.
+    let ink = 0.78 + 0.18 * energy;
     for pair in pts.windows(2) {
         draw_line(
             pair[0].0,
             pair[0].1,
             pair[1].0,
             pair[1].1,
-            (base_r * 0.72).max(2.4),
-            Color::new(0.02, 0.03, 0.05, 0.92),
+            (base_r * 0.55).max(1.6),
+            Color::new(0.02, 0.03, 0.05, 0.9),
         );
         draw_line(
             pair[0].0,
             pair[0].1,
             pair[1].0,
             pair[1].1,
-            (base_r * 0.38).max(1.6),
-            Color::new(cr * ink, cg * ink, cb * ink, 0.75 + 0.2 * hover),
+            (base_r * 0.28).max(1.1),
+            Color::new(cr * ink, cg * ink, cb * ink, 0.7 + 0.2 * hover),
         );
     }
     for (i, &(x, y)) in pts.iter().enumerate() {
-        let fall = 1.0 - i as f32 * (0.55 / n.max(1) as f32);
+        let fall = 1.0 - i as f32 * (0.5 / n.max(1) as f32);
         let head = i == 0;
         let rad = base_r
             * if head {
-                1.55 + 0.25 * mouth
+                1.3 + 0.15 * mouth
             } else {
-                1.15
+                0.95
             }
             * fall.max(0.55);
         draw_circle(x, y, rad, Color::new(0.03, 0.02, 0.05, 1.0));
@@ -3024,60 +3441,56 @@ fn paint_organism(
             x,
             y,
             rad,
-            (2.0 + 0.8 * hover).max(1.6),
-            Color::new(cr, cg, cb, 0.88 + 0.12 * hover),
-        );
-        draw_circle_lines(
-            x,
-            y,
-            rad * 0.72,
-            1.1,
-            Color::new(
-                (cr + 0.25).min(1.0),
-                (cg + 0.2).min(1.0),
-                (cb + 0.15).min(1.0),
-                0.35 + 0.25 * energy,
-            ),
+            (1.4 + 0.5 * hover).max(1.1),
+            Color::new(cr, cg, cb, 0.85 + 0.12 * hover),
         );
         if head {
             draw_circle(
                 x,
                 y,
-                rad * 0.28,
-                Color::new(0.92, 1.0, 0.98, 0.4 + 0.4 * mouth + 0.15 * hover),
+                rad * 0.32,
+                Color::new(0.92, 1.0, 0.98, 0.35 + 0.35 * mouth + 0.1 * hover),
             );
         }
     }
-    let core = (base_r * 0.55).max(2.2);
-    if let Some(g) = gfx {
-        g.soft_blob(
-            mid_x,
-            mid_y,
-            core * (2.4 + 0.4 * hover),
-            Color::new(0.72, 0.48, 1.0, 0.55 + 0.25 * hover),
-            1.6,
-            -1.0,
-            0.55 + 0.2 * hover,
-        );
-    }
-    draw_circle(
-        mid_x,
-        mid_y,
-        core + 1.0 + 1.2 * hover,
-        Color::new(0.55, 0.32, 0.9, 0.55),
-    );
-    draw_circle_lines(
-        mid_x,
-        mid_y,
-        core + 0.5,
-        1.6,
-        Color::new(0.85, 0.65, 1.0, 0.9 + 0.1 * hover),
-    );
-    draw_circle(mid_x, mid_y, core * 0.4, Color::new(0.9, 0.78, 1.0, 0.95));
+    // Small nucleus accent (no multi-ring purple core).
+    let core = (base_r * 0.38).max(1.6);
+    draw_circle(mid_x, mid_y, core, Color::new(0.62, 0.4, 0.95, 0.55 + 0.15 * hover));
+    draw_circle(mid_x, mid_y, core * 0.45, Color::new(0.9, 0.8, 1.0, 0.75));
     if gfx.is_none() {
         draw_energy_bar(frame, cam, font, app);
     }
     let _ = font;
+}
+
+fn paint_select_glow_cont(
+    g: &Gfx,
+    frame: &Frame,
+    cam: &Cam,
+    app: &Appearance<'_>,
+    t: f32,
+    time: f32,
+) {
+    if app.nodes.is_empty() || t < 0.02 {
+        return;
+    }
+    let s = world_scale(frame, cam);
+    let (r, gc, b) = hsv(app.hue, 0.9, 1.0);
+    let breathe = 1.0 + 0.045 * (time * 1.7).sin() * t;
+    for (i, node) in app.nodes.iter().enumerate() {
+        let (x, y) = world_to_screen(frame, cam, *node + app.dish_pos);
+        let base = app.node_radius * 0.68 * if i == 0 { 1.35 } else { 1.1 } * s;
+        let rad = (base * breathe + 5.0 * t).max(3.0);
+        g.soft_blob_cont(
+            x,
+            y,
+            rad,
+            Color::new(r, gc, b, 0.2 + 0.35 * t),
+            2.4,
+            0.35,
+            0.15 * t,
+        );
+    }
 }
 
 fn paint_select_glow(
@@ -3112,6 +3525,95 @@ fn paint_select_glow(
     } else {
         draw_select_glow(frame, cam, app, t, time);
     }
+}
+
+fn paint_spark_cont(g: &Gfx, frame: &Frame, cam: &Cam, spark: &Spark) {
+    let (x, y) = world_to_screen(frame, cam, spark.pos);
+    if x < -20.0 || x > frame.sw + 20.0 || y < -20.0 || y > frame.sh + 20.0 {
+        return;
+    }
+    let t = (spark.life / spark.max_life).clamp(0.0, 1.0);
+    let unit = frame.sh * 0.012 * cam.zoom;
+    match spark.style {
+        1 => {
+            let (r, gc, b) = (0.95, 0.18 + spark.hue * 0.15, 0.22);
+            let rad = (spark.size * unit * (0.5 + 0.55 * t)).max(1.4);
+            g.soft_blob_cont(
+                x,
+                y,
+                rad * 2.2,
+                Color::new(r, gc, b, 0.85 * t),
+                1.5,
+                -1.0,
+                0.4 * t,
+            );
+        }
+        2 => {
+            let (r, gc, b) = hsv(spark.hue, 0.7, 1.0);
+            let rad = (spark.size * unit * (0.65 + 0.5 * t)).max(2.0);
+            g.soft_blob_cont(
+                x,
+                y,
+                rad * 2.4,
+                Color::new(r, gc, b, 0.8 * t),
+                1.6,
+                -1.0,
+                0.5 * t,
+            );
+        }
+        _ => {
+            let (r, gc, b) = hsv(spark.hue, 0.75, 1.0);
+            let rad = (spark.size * unit * (0.55 + 0.45 * t)).max(1.1);
+            g.soft_blob_cont(
+                x,
+                y,
+                rad * 2.0,
+                Color::new(r, gc, b, t),
+                1.8,
+                -1.0,
+                0.35 * t,
+            );
+        }
+    }
+}
+
+fn paint_flash_cont(g: &Gfx, frame: &Frame, cam: &Cam, flash: &Flash) {
+    let (x, y) = world_to_screen(frame, cam, flash.pos);
+    if x < -40.0 || x > frame.sw + 40.0 || y < -40.0 || y > frame.sh + 40.0 {
+        return;
+    }
+    let t = (flash.life / flash.max_life).clamp(0.0, 1.0);
+    let unit = frame.sh * 0.014 * cam.zoom;
+    let rad = unit * (0.6 + 1.4 * (1.0 - t));
+    g.soft_blob_cont(
+        x,
+        y,
+        rad * 2.2,
+        Color::new(1.0, 0.85, 0.55, 0.45 * t),
+        2.0,
+        0.25,
+        0.35 * t,
+    );
+}
+
+fn paint_mote_cont(g: &Gfx, frame: &Frame, cam: &Cam, mote: &Mote) {
+    let (x, y) = world_to_screen(frame, cam, mote.pos);
+    if x < 0.0 || x > frame.sw || y < 0.0 || y > frame.sh {
+        return;
+    }
+    let t = (mote.life / 0.35).clamp(0.0, 1.0);
+    let (r, gc, b) = hsv(mote.hue, 0.7, 1.0);
+    let unit = frame.sh * 0.004 * cam.zoom;
+    let rad = ((1.3 + t) * unit).max(0.8);
+    g.soft_blob_cont(
+        x,
+        y,
+        rad * 2.5,
+        Color::new(r, gc, b, 0.5 * t),
+        2.0,
+        -1.0,
+        0.2 * t,
+    );
 }
 
 fn paint_spark(gfx: Option<&Gfx>, frame: &Frame, cam: &Cam, spark: &Spark) {
@@ -3221,6 +3723,88 @@ enum FeederHoverAction {
     Toggle(usize),
     RateMinus(usize),
     RatePlus(usize),
+    Settings(usize),
+}
+
+/// Screen-space quick controls under a feeder node.
+fn feeder_quick_rects(sx: f32, sy: f32, box_half: f32) -> [(FeederHoverAction, (f32, f32, f32, f32)); 4] {
+    let bar_y = sy + box_half + 7.0;
+    let bar_h = 20.0;
+    let tog_w = 34.0;
+    let tog_x = sx - 52.0;
+    let btn_w = 18.0;
+    let minus_x = sx - 14.0;
+    let val_x = sx + 6.0;
+    let val_w = 28.0;
+    let plus_x = val_x + val_w + 2.0;
+    let settings_x = plus_x + btn_w + 4.0;
+    [
+        (FeederHoverAction::Toggle(0), (tog_x, bar_y, tog_w, bar_h)),
+        (FeederHoverAction::RateMinus(0), (minus_x, bar_y, btn_w, bar_h)),
+        (FeederHoverAction::RatePlus(0), (plus_x, bar_y, btn_w, bar_h)),
+        (FeederHoverAction::Settings(0), (settings_x, bar_y, btn_w, bar_h)),
+    ]
+}
+
+fn feeder_node_hover_zone(sx: f32, sy: f32) -> (f32, f32, f32, f32) {
+    // Covers node + ZAP/−/rate/+/settings row.
+    (sx - 58.0, sy - 22.0, 148.0, 72.0)
+}
+
+fn feeder_controls_hover(
+    frame: &Frame,
+    cam: &Cam,
+    world: &World,
+    mouse: (f32, f32),
+    selected: Option<usize>,
+    hover_all: bool,
+) -> bool {
+    for (i, feeder) in world.feeders().iter().enumerate() {
+        let (sx, sy) = world_to_screen(frame, cam, feeder.pos);
+        let zone = feeder_node_hover_zone(sx, sy);
+        let over = hit_rect(mouse, zone);
+        if over || selected == Some(i) || hover_all {
+            if over {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn hit_feeder_quick(
+    frame: &Frame,
+    cam: &Cam,
+    world: &World,
+    mouse: (f32, f32),
+    selected: Option<usize>,
+    hover_all: bool,
+) -> Option<FeederHoverAction> {
+    for (i, feeder) in world.feeders().iter().enumerate() {
+        let (sx, sy) = world_to_screen(frame, cam, feeder.pos);
+        let is_selected = selected == Some(i);
+        let zone = feeder_node_hover_zone(sx, sy);
+        let node_hover = hit_rect(mouse, zone);
+        if !(node_hover || is_selected || hover_all) {
+            continue;
+        }
+        // Only accept button hits when the control row is visible for this feeder.
+        if !(node_hover || is_selected) {
+            continue;
+        }
+        let box_half = if is_selected || hover_all { 12.0 } else { 10.5 };
+        for (kind, rect) in feeder_quick_rects(sx, sy, box_half) {
+            if hit_rect(mouse, rect) {
+                return Some(match kind {
+                    FeederHoverAction::Toggle(_) => FeederHoverAction::Toggle(i),
+                    FeederHoverAction::RateMinus(_) => FeederHoverAction::RateMinus(i),
+                    FeederHoverAction::RatePlus(_) => FeederHoverAction::RatePlus(i),
+                    FeederHoverAction::Settings(_) => FeederHoverAction::Settings(i),
+                });
+            }
+        }
+    }
+    None
 }
 
 fn draw_feeders(
@@ -3235,10 +3819,9 @@ fn draw_feeders(
     mouse: (f32, f32),
     hover_all: bool,
     ui_block: bool,
-) -> Option<FeederHoverAction> {
+) {
     let scale = world_scale(frame, cam);
     let time = world.time();
-    let mut clicked_action = None;
 
     for (i, feeder) in world.feeders().iter().enumerate() {
         let pos = feeder.pos;
@@ -3252,16 +3835,11 @@ fn draw_feeders(
         let bx = sx - half_b;
         let by = sy - half_b;
 
-        // Hover test for the feeder node and its immediate quick-control area
-        let node_hover = !ui_block
-            && mouse.0 >= sx - 45.0
-            && mouse.0 <= sx + 45.0
-            && mouse.1 >= sy - 20.0
-            && mouse.1 <= sy + 42.0;
-
+        let zone = feeder_node_hover_zone(sx, sy);
+        // Don't gate on ui_block — side tools / panels set ui_block while hovering these controls.
+        let node_hover = hit_rect(mouse, zone);
         let lit = is_selected || hover_all || node_hover;
 
-        // Draw dispersion area circle when selected or when hovering the feeder button
         if lit {
             let pixel_radius = feeder.radius * scale;
             let alpha = if is_selected { 0.08 } else { 0.05 };
@@ -3270,10 +3848,8 @@ fn draw_feeders(
             draw_circle_lines(sx, sy, pixel_radius, 1.4, Color::new(cr, cg, cb, line_a));
         }
 
-        // Feeder dispenser: rounded square node (approx 22x22 px)
         let a = if feeder.enabled { 0.98 } else { 0.45 };
 
-        // Glow behind node
         if feeder.enabled || lit {
             fill_round_rect(
                 bx - 3.0,
@@ -3285,7 +3861,6 @@ fn draw_feeders(
             );
         }
 
-        // Rounded box background & border
         fill_round_rect(
             bx,
             by,
@@ -3301,7 +3876,6 @@ fn draw_feeders(
         };
         stroke_round_rect(bx, by, box_size, box_size, 5.0, if lit { 1.8 } else { 1.3 }, border_col);
 
-        // Food icon inside the rounded square
         let food_rad = (box_size * 0.24).max(3.0);
         draw_circle(sx, sy, food_rad, Color::new(cr, cg, cb, if feeder.enabled { 0.95 } else { 0.40 }));
         draw_circle(
@@ -3311,64 +3885,20 @@ fn draw_feeders(
             Color::new(1.0, 1.0, 1.0, if feeder.enabled { 0.85 } else { 0.30 }),
         );
 
-        // Subtle activity pulse ring when enabled
         if feeder.enabled {
             let pulse = ((time * 3.5).sin() * 0.5 + 0.5) * 3.0;
             draw_circle_lines(sx, sy, half_b + 1.0 + pulse, 1.0, Color::new(cr, cg, cb, 0.45));
         }
 
-        // On hover or selection: show quick toggle (ZAP/VYP) and rate controls (-/+)
         if node_hover || is_selected {
-            let bar_y = sy + half_b + 7.0;
+            let box_half = half_b;
+            let rects = feeder_quick_rects(sx, sy, box_half);
+            let bar_y = sy + box_half + 7.0;
             let bar_h = 20.0;
-
-            // 1. Toggle switch (ZAP / VYP)
-            let tog_w = 34.0;
-            let tog_x = sx - 44.0;
-            let tog_rect = (tog_x, bar_y, tog_w, bar_h);
-            let tog_hot = hit_rect(mouse, tog_rect);
-            let (tog_label, tog_col) = if feeder.enabled {
-                ("ZAP", Color::new(0.35, 0.95, 0.85, 0.95))
-            } else {
-                ("VYP", Color::new(0.60, 0.68, 0.75, 0.75))
-            };
-            fill_round_rect(tog_x, bar_y, tog_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
-            stroke_round_rect(
-                tog_x,
-                bar_y,
-                tog_w,
-                bar_h,
-                4.0,
-                1.1,
-                if tog_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { tog_col },
-            );
-            center_text(font, tog_label, tog_x + tog_w * 0.5, bar_y + 14.0, 10, tog_col);
-            if tog_hot && is_mouse_button_pressed(MouseButton::Left) {
-                clicked_action = Some(FeederHoverAction::Toggle(i));
-            }
-
-            // 2. Stepper minus (-)
             let btn_w = 18.0;
-            let minus_x = sx - 6.0;
-            let minus_rect = (minus_x, bar_y, btn_w, bar_h);
-            let minus_hot = hit_rect(mouse, minus_rect);
-            fill_round_rect(minus_x, bar_y, btn_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
-            stroke_round_rect(
-                minus_x,
-                bar_y,
-                btn_w,
-                bar_h,
-                4.0,
-                1.0,
-                if minus_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { Color::new(0.40, 0.55, 0.65, 0.75) },
-            );
-            center_text(font, "−", minus_x + btn_w * 0.5, bar_y + 14.0, 11, Color::new(0.85, 0.92, 0.98, 0.90));
-            if minus_hot && is_mouse_button_pressed(MouseButton::Left) {
-                clicked_action = Some(FeederHoverAction::RateMinus(i));
-            }
 
-            // 3. Current rate value label
-            let val_x = sx + 14.0;
+            // Draw rate label between − and +.
+            let val_x = sx + 6.0;
             let val_w = 28.0;
             center_text(
                 font,
@@ -3379,28 +3909,73 @@ fn draw_feeders(
                 Color::new(0.85, 0.95, 0.95, 0.95),
             );
 
-            // 4. Stepper plus (+)
-            let plus_x = val_x + val_w + 2.0;
-            let plus_rect = (plus_x, bar_y, btn_w, bar_h);
-            let plus_hot = hit_rect(mouse, plus_rect);
-            fill_round_rect(plus_x, bar_y, btn_w, bar_h, 4.0, Color::new(0.04, 0.05, 0.09, 0.92));
-            stroke_round_rect(
-                plus_x,
-                bar_y,
-                btn_w,
-                bar_h,
-                4.0,
-                1.0,
-                if plus_hot { Color::new(1.0, 1.0, 1.0, 0.95) } else { Color::new(0.40, 0.55, 0.65, 0.75) },
-            );
-            center_text(font, "+", plus_x + btn_w * 0.5, bar_y + 14.0, 11, Color::new(0.85, 0.92, 0.98, 0.90));
-            if plus_hot && is_mouse_button_pressed(MouseButton::Left) {
-                clicked_action = Some(FeederHoverAction::RatePlus(i));
+            for (kind, rect) in &rects {
+                let (rx, ry, rw, rh) = *rect;
+                let hot = hit_rect(mouse, *rect);
+                fill_round_rect(rx, ry, rw, rh, 4.0, Color::new(0.04, 0.05, 0.09, 0.55));
+                let stroke = if hot {
+                    Color::new(1.0, 1.0, 1.0, 0.95)
+                } else {
+                    Color::new(0.40, 0.55, 0.65, 0.75)
+                };
+                match kind {
+                    FeederHoverAction::Toggle(_) => {
+                        let (tog_label, tog_col) = if feeder.enabled {
+                            ("ZAP", Color::new(0.35, 0.95, 0.85, 0.95))
+                        } else {
+                            ("VYP", Color::new(0.60, 0.68, 0.75, 0.75))
+                        };
+                        stroke_round_rect(rx, ry, rw, rh, 4.0, 1.1, if hot { stroke } else { tog_col });
+                        center_text(font, tog_label, rx + rw * 0.5, ry + 14.0, 10, tog_col);
+                    }
+                    FeederHoverAction::RateMinus(_) => {
+                        stroke_round_rect(rx, ry, rw, rh, 4.0, 1.0, stroke);
+                        center_text(
+                            font,
+                            "−",
+                            rx + rw * 0.5,
+                            ry + 14.0,
+                            11,
+                            Color::new(0.85, 0.92, 0.98, 0.90),
+                        );
+                    }
+                    FeederHoverAction::RatePlus(_) => {
+                        stroke_round_rect(rx, ry, rw, rh, 4.0, 1.0, stroke);
+                        center_text(
+                            font,
+                            "+",
+                            rx + rw * 0.5,
+                            ry + 14.0,
+                            11,
+                            Color::new(0.85, 0.92, 0.98, 0.90),
+                        );
+                    }
+                    FeederHoverAction::Settings(_) => {
+                        let gear = Color::new(0.55, 0.9, 0.95, if hot { 1.0 } else { 0.85 });
+                        stroke_round_rect(rx, ry, rw, rh, 4.0, 1.0, if hot { stroke } else { gear });
+                        // Simple gear: ring + spokes.
+                        let gcx = rx + rw * 0.5;
+                        let gcy = ry + rh * 0.5;
+                        draw_circle_lines(gcx, gcy, 4.2, 1.3, gear);
+                        draw_circle(gcx, gcy, 1.4, gear);
+                        for k in 0..4 {
+                            let ang = k as f32 * std::f32::consts::FRAC_PI_2 + 0.4;
+                            draw_line(
+                                gcx + ang.cos() * 2.8,
+                                gcy + ang.sin() * 2.8,
+                                gcx + ang.cos() * 5.5,
+                                gcy + ang.sin() * 5.5,
+                                1.4,
+                                gear,
+                            );
+                        }
+                        let _ = (btn_w, bar_h);
+                    }
+                }
             }
         }
     }
 
-    // Ghost preview when placing new feeder
     if feed_tool && !ui_block {
         let (sx, sy) = (mouse.0, mouse.1);
         let spec = world.food_spec(feed_kind);
@@ -3409,7 +3984,6 @@ fn draw_feeders(
         draw_circle(sx, sy, pixel_radius, Color::new(cr, cg, cb, 0.08));
         draw_circle_lines(sx, sy, pixel_radius, 1.3, Color::new(cr, cg, cb, 0.55));
 
-        // Ghost box
         let box_size = 22.0;
         let half_b = box_size * 0.5;
         let bx = sx - half_b;
@@ -3426,8 +4000,6 @@ fn draw_feeders(
         };
         center_text(font, kind_str, sx, sy + half_b + 12.0, 10, Color::new(0.85, 0.92, 0.98, 0.85));
     }
-
-    clicked_action
 }
 
 fn draw_logo_dna(
@@ -3650,6 +4222,7 @@ fn draw_logo_dna(
 }
 
 
+#[allow(dead_code)]
 fn draw_food_button(
     frame: &Frame,
     font: &Option<Font>,
@@ -5890,9 +6463,10 @@ fn draw_neon_logo(
         g.end_glow();
     }
 
-    // Radial blur streaks — ghost logo passes outward from center.
+    // Radial blur streaks — ghost logo passes (LOD during burst).
     let radial = (blur * 0.85 + burst * 0.55).clamp(0.0, 1.0);
-    if radial > 0.05 {
+    let burst_lod = burst > 0.05;
+    if radial > 0.05 && !burst_lod {
         let ghosts = 2;
         for g in 1..=ghosts {
             let t = g as f32 / ghosts as f32;
@@ -5929,6 +6503,24 @@ fn draw_neon_logo(
                 );
             }
         }
+    } else if radial > 0.05 && burst_lod {
+        // Single lightweight ghost during burst.
+        let stretch = 1.0 + radial * 0.12;
+        let ga = letter_a * 0.08;
+        if ga > 0.01 {
+            paint_logo_wordmark(
+                None,
+                font,
+                lx,
+                ly,
+                mouse,
+                letter_scale * stretch,
+                ga,
+                time,
+                burst,
+                true,
+            );
+        }
     }
 
     draw_logo_dna(
@@ -5937,9 +6529,12 @@ fn draw_neon_logo(
     if letter_a > 0.02 {
         paint_logo_wordmark(gfx, font, lx, ly, mouse, letter_scale, letter_a, time, burst, false);
     }
-    draw_logo_dna(
-        gfx, dna_cx, dna_cy, mouse, time, dna_s, dna_a * 1.04, 0.40, 1.05, dna_park, burst,
-    );
+    // Second depth DNA pass — skip during burst for LOD.
+    if !burst_lod {
+        draw_logo_dna(
+            gfx, dna_cx, dna_cy, mouse, time, dna_s, dna_a * 1.04, 0.40, 1.05, dna_park, burst,
+        );
+    }
 }
 
 const BASE_LOGO_FS: u16 = 72;
@@ -6079,7 +6674,11 @@ fn paint_logo_wordmark(
         }
     }
 
-    let layer_range = if is_ghost { 1..2 } else { 0..3 };
+    let layer_range = if is_ghost || burst > 0.05 {
+        1..2
+    } else {
+        0..3
+    };
     for layer in layer_range {
         let (op, blur_mul, scatter) = layer_style(layer);
         let mut x = base_x;
@@ -6137,8 +6736,8 @@ fn paint_logo_wordmark(
                 op * 0.55 * (la / a.max(1e-3)),
             );
 
-            let blur_steps = if is_ghost {
-                1
+            let blur_steps = if is_ghost || burst > 0.05 {
+                0
             } else if burst > 0.2 {
                 2
             } else {
@@ -7388,7 +7987,7 @@ fn synapse_point(x0: f32, y0: f32, x1: f32, y1: f32, salt: usize, t: f32) -> (f3
 }
 
 fn draw_synapse_curve(x0: f32, y0: f32, x1: f32, y1: f32, salt: usize, width: f32, color: Color) {
-    let n = 14;
+    let n = 6;
     let mut prev = (x0, y0);
     for i in 1..=n {
         let t = i as f32 / n as f32;

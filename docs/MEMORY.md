@@ -20,10 +20,11 @@
 1. **Simulace ≠ view** — lib nemá Macroquad; view jen prezentuje.  
 2. **Balanc patří do `tune.rs`** — nehardcodit magické konstanty do world/organism bez důvodu.  
 3. **Genom je zdroj pravdy** pro topologii mozku; brain se z něj skládá a prunuje.  
-4. **Dish-local souřadnice** pro těla/jídlo; table transform přes `PetriDish::{to_table,to_local}`.  
-5. **Kill-forward ≠ food mouth** — útok je záměrný actuator, ne kolize pusy s jídlem.  
-6. **Save = bincode snapshot + SQLite meta** — payload opaque blob.  
-7. **Macroquad font rendering** — pro dynamické škálování (zoom kamery, burst animace loga) vždy používat fixní základní `font_size` a měřítko předávat přes `font_scale` (příp. `font_scale_aspect`). Dynamická změna `font_size` každým snímkem nutí CPU rastrovat glyfy do atlasu a způsobuje těžké propady FPS.
+4. **Jediný hardcoded pud = přežití** — tlama + urgency k jídlu při hladu; pohyb/útok/signal/repro řídí NN.  
+5. **Dish-local souřadnice** pro těla/jídlo; table transform přes `PetriDish::{to_table,to_local}`.  
+6. **Kill-forward ≠ food mouth** — útok je záměrný actuator, ne kolize pusy s jídlem.  
+7. **Save = bincode snapshot + SQLite meta** — payload opaque blob.  
+8. **Macroquad font rendering** — pro dynamické škálování (zoom kamery, burst animace loga) vždy používat fixní základní `font_size` a měřítko předávat přes `font_scale` (příp. `font_scale_aspect`). Dynamická změna `font_size` každým snímkem nutí CPU rastrovat glyfy do atlasu a způsobuje těžké propady FPS.
 
 ---
 
@@ -33,6 +34,9 @@
 - Liquid musí jít **edge-to-edge** (`draw_water(0,0,sw,sh)`), ne přes `dish_fit_rect` (ten nechává černé okraje).  
 - Cursor light: (a) zesvětlí floor dots, (b) **ztenčí zelený gel** (mix do clear water + ubrání G).  
 - Rim shaderu: jemný teal, **ne** mix do near-black.
+
+### Boot splash
+- Při startu (ne `--shot`): horizontální **skleněná DNA dvojšroubovice** (průhledný rim) se postupně **zalévá barvou** zleva doprava podle progress loadu; pod ní „AETHER“; fade do Title. Mid-game loading screeny nepoužívat.
 
 ### Roameři
 - Volný pohyb po celé ploše včetně za logem/menu.  
@@ -46,6 +50,7 @@
 - Hue: **seamless sin wave** podél helixu i písmen (žádný hard wrap 1→0).  
 - Barva písmen: diagonála L→R + top→bottom, sync s DNA.  
 - Odlesky: permanentní tint z helix barvy; **bez** myších kuliček/caustic blobs.
+- **Burst LOD**: při new-game shatter méně glass vrstev / blur offsets / DNA depth passů; seed populace po dávkách pod veilem.
 
 ### Přechod Nová hra
 - Zoom-in + postupný radial blur.  
@@ -61,8 +66,10 @@
 - Ohraničení misky (skleněný lem) funguje jako fyzická bariéra: **uvnitř misky není ani zelená mlha, ani tečky/bubliny** (ty zůstávají na stole vně misek).  
 - Přehled **EKOSYSTÉM** (census) je trvale zobrazen vpravo vedle misky, zvětšený o 50 %, bez rámečku a pozadí (čistá plovoucí typografie). Je pevně svázán s miskou (pohybuje se 1:1 s ní bez odskakování u horního okraje) a rozestup mezi názvy a hodnotami je čistě relativní vůči měřítku světa. Čas simulace byl přesunut z hlavičky přímo vedle nadpisu EKOSYSTÉM.  
 - Hlavička misky: border a pozadí odstraněny; tlačítka (nastavení misky, pauza, rychlost, uložení) jsou vycentrovaná nad středem misky, zvětšená a s většími mezerami mezi sebou.  
-- Spodní lišta na stole: obsahuje 3 tlačítka (*Jedinec*, *Krmítko*, *Přidat misku*). Tlačítko nastavení dole na stole bylo zrušeno (nastavení se otevírá ozubeným kolem v hlavičce misky).  
+- **Nástroje misky**: sloupec vpravo nahoře — průhledné ikony (*Jedinec* / *Krmítko* / *Kolonie*). Jedinec jen spawne (bez auto-inspect). Nová kolonie → modal → `seed_dish`. Hover krmítka: ZAP/−/+/ozubené (otevře nastavení). LMB na organismus = detail; **Shift+LMB** = mutace.  
 - Chrome: flat dark panels (`CHROME_FILL` / `CHROME_EDGE`) pro modály, inspect: Info + Genom taby.
+- **Glow batch**: v Running jeden `begin_glow`/`end_glow` pro food + organismy + FX (`soft_blob_cont`).
+- Inspect: cache `Net` topologie + refresh aktivací; tenčí synapse křivky.
 
 ---
 
@@ -76,9 +83,10 @@
 
 ## Výkonnostní konvence (view/gfx)
 
-- Preferovat **jeden** `begin_glow` / `end_glow` batch.  
+- Preferovat **jeden** `begin_glow` / `end_glow` batch (Running: food+orgs+FX v jednom bindu).  
 - Neonemožit multi-pass redraw celé title colony „kvůli bluru“ (historicky hitchovalo).  
-- Burst radial blur: omezený počet ghostů; hlavní efekt = geometrie flight.  
+- Burst radial blur: omezený počet ghostů; hlavní efekt = geometrie flight; během burst LOD méně passů.  
+- Boot: warm-up běžných `font_size` do atlasu před lobby.  
 - Dev `opt-level = 1` je záměr.
 
 ---
@@ -134,6 +142,8 @@
 | Modrofialová miska & kolečko krmítka | Pozadí v misce přebarveno do tmavé modrofialové / indigové palety; při aktivním umisťování krmítka lze kolečkem myši plynule měnit oblast rozptylu s okamžitým ghost preview a bez zoomování kamery |
 | Vzhled krmítek & mutace kliknutím | Krmítka mají zaoblený čtvercový uzel s ikonou potravy a textovým labelem; spodní tlačítko nese ikonu potravy, badge s počtem aktivních krmítek a hover zvýrazní všechna krmítka; kliknutí na organismus vyvolá novou mutaci bez otevření okna detailu |
 | Rychlé hover ovládání & badge krmítek | Popisek pod krmítkem odstraněn (čistá plocha); při hoveru nad krmítkem se zobrazí vypínač ZAP/VYP a tlačítka −/+ pro rychlou změnu intervalu dávkování; spodní badge zobrazuje celkový počet krmítek bez ohledu na zapnutí |
+| Hitch fix & side tools | Boot splash + font warm-up; Running glow batch; burst LOD + incremental seed; nástroje vpravo nahoře (Jedinec bez pin / Krmítko / Nová kolonie); Net cache; detail = Shift+klik |
+| Survival pud vs NN | Jediný hardcoded pud = přežití druhu: tlama při hladu+vůni a urgency blend směru k jídlu. Chemotaxe/foraging jinak NN přes senzory `jídlo vpřed/stranou`. Bite 0.12, lehčí metabolismus, víc starter jídla (většinou zelené). |
 
 ---
 

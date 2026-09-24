@@ -6,34 +6,36 @@ pub const MAX_DISHES: usize = 8;
 
 pub const DT_CAP: f32 = 1.0 / 30.0;
 
-pub const BASAL_MASS: f32 = 0.009;
-pub const BASAL_NEURON: f32 = 0.00026;
-pub const BASAL_SYNAPSE: f32 = 0.000045;
+pub const BASAL_MASS: f32 = 0.007;
+pub const BASAL_NEURON: f32 = 0.0002;
+pub const BASAL_SYNAPSE: f32 = 0.00003;
 
-pub const EAT_YIELD: f32 = 0.82;
+pub const EAT_YIELD: f32 = 0.92;
 /// How far from the head the food sensors reach. Same length as the drawn sense arcs.
 pub const FOOD_SENSOR_REACH: f32 = 0.45;
-pub const FOOD_BITE: f32 = 0.05;
-pub const MOUTH_OPEN: f32 = 0.4;
+/// Head must land within this distance to swallow a particle (also floors at ~body radius).
+pub const FOOD_BITE: f32 = 0.12;
+/// Survival-reflex mouth threshold (smell × taste × hunger). Not an NN action.
+pub const MOUTH_OPEN: f32 = 0.32;
 /// Soft ceiling so auto-spawn cannot pack the dish.
 pub const FOOD_CAP: usize = 48;
 pub const FOOD_KIND_COUNT: usize = 3;
-pub const MOVE_COST: f32 = 0.016;
+pub const MOVE_COST: f32 = 0.011;
 pub const SIGNAL_COST: f32 = 0.012;
 pub const HEAL_RATE: f32 = 0.012;
 pub const HEAL_COST: f32 = 0.01;
 
 pub const MAX_ENERGY: f32 = 2.0;
-pub const START_ENERGY: f32 = 1.05;
-pub const CHILD_ENERGY: f32 = 0.58;
-pub const REPRO_THRESHOLD: f32 = 1.12;
-pub const REPRO_OVERHEAD: f32 = 0.06;
-pub const REPRO_COOLDOWN: f32 = 5.0;
+pub const START_ENERGY: f32 = 1.35;
+pub const CHILD_ENERGY: f32 = 0.52;
+pub const REPRO_THRESHOLD: f32 = 0.92;
+pub const REPRO_OVERHEAD: f32 = 0.04;
+pub const REPRO_COOLDOWN: f32 = 3.5;
 pub const BITE_RATE: f32 = 0.2;
 pub const BITE_EFFICIENCY: f32 = 0.72;
 
-pub const THRUST: f32 = 0.36;
-pub const DRAG: f32 = 7.8;
+pub const THRUST: f32 = 0.42;
+pub const DRAG: f32 = 6.4;
 pub const SPRING_K: f32 = 28.0;
 pub const MUSCLE_SHORTEN: f32 = 0.42;
 

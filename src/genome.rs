@@ -8,9 +8,9 @@ use crate::tune::{
 };
 
 /// Fixed sensory ports. Values fed into the net are clamped to `[0, 1]`.
-/// The first eleven are the spec sensors; the rest keep the dish readable
-/// (food kinds, touch, body).
-pub const SENSOR_BASE: usize = 24;
+/// Includes food-kind smells plus forward/side food aim so foraging can evolve in the net
+/// (no hardcoded chemotaxis).
+pub const SENSOR_BASE: usize = 26;
 /// Fixed action ports. Muscle ports follow, one per body spring.
 pub const ACTION_BASE: usize = 15;
 
@@ -32,6 +32,9 @@ pub const ACT_GROWTH: usize = 14;
 /// First of three head-smell channels (green, amber, toxic).
 pub const SENSE_FOOD: usize = 11;
 pub const SENSE_FOOD_KINDS: usize = 3;
+/// Taste-weighted food direction in body frame (after kind smells + Δ).
+pub const SENSE_FOOD_FWD: usize = 15;
+pub const SENSE_FOOD_SIDE: usize = 16;
 
 /// One connection, packed into 32 bits.
 ///

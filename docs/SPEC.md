@@ -47,6 +47,10 @@ Sandbox evoluční simulace: organismy žijí v Petri misce, rozhodují se jen v
 | `NODES_BIRTH_*` | 3 / 7 | rozsah při narození |
 | `BIT_FLIP` | 0.001 | mutace bitu |
 | `WEIGHT_DIVISOR` | 8000 | i16 → float váha |
+| `FOOD_BITE` | 0.12 | dosah snězení (min. s radiusem těla) |
+| `MOUTH_OPEN` | 0.32 | práh survival tlamy |
+| `REPRO_THRESHOLD` | 0.92 | energie pro potomka |
+| `START_ENERGY` | 1.35 | energie nového jedince |
 
 ### 2.3 Genom
 
@@ -59,7 +63,7 @@ Sandbox evoluční simulace: organismy žijí v Petri misce, rozhodují se jen v
 15..0   weight i16 / 8000
 ```
 
-**Sensory ports** (`SENSOR_BASE` = 24): věk, oscilátor, pozice, rychlost, feromon, touch, food kinds, …  
+**Sensory ports** (`SENSOR_BASE` = 26): pozice, okraj, feromon, hustota, crowd grad, věk, oscilátor, vůně druhů jídla, Δ vůně, **jídlo vpřed/stranou**, kin, touch, energie, bolest, svalové délky.  
 **Action ports** (`ACTION_BASE` = 15): move X/Y/forward/random/cardinal, pheromone, responsiveness, oscillator, kill-forward, enzyme, reproduce, growth + per-node muscles.
 
 ### 2.4 Brain
@@ -73,6 +77,7 @@ Sandbox evoluční simulace: organismy žijí v Petri misce, rozhodují se jen v
 - Repro: threshold + cooldown + child energy split  
 - Bite: `ACT_KILL_FORWARD` → attack (ne food mouth)  
 - Food valence: učení aversion u Toxic  
+- **Hardcoded survival pud** (jediný): (1) otevření tlamy při hladu + přijatelné vůni, (2) při `hunger×smell` urgency přimíchání směru k jídlu. Pohyb, útok, enzym, signal, reprodukce = NN.
 
 ### 2.6 Jídlo
 
@@ -136,12 +141,15 @@ API: `open_default`, `list_saves`, `save_simulation`, `load_simulation`, `delete
 - Midpoint: spawn world + flip na Running  
 
 ### 4.3 Running chrome
-- Bottom TOOL bar (spawn, pause, food, dish, settings, saves, info, speed)  
-- Header bez rámečku a pozadí s tlačítkem nastavení misky vlevo; přehled EKOSYSTÉM trvale vpravo vedle misky (+50 %, bez karty)  
-- Miska součástí tekutého pozadí; uvnitř bez mlhy a teček, skleněný lem zadržuje okolní zelenou mlhu a částice  
-- Inspect right panel (Info / Genom)  
-- Life setup modal pro prázdnou misku  
-- Camera: pan, zoom, follow pinned organism  
+- Side tools top-right (stacked): Jedinec, Krmítko, Nová kolonie
+- Header bez rámečku a pozadí; přehled INFO trvale u misky
+- Miska součástí tekutého pozadí; uvnitř bez mlhy a teček
+- Inspect right panel (Info / Genom); open via Shift+click on organism
+- Life setup modal for **Nová kolonie** (`seed_dish`)
+- Camera: pan (incl. RMB drag), zoom, follow pinned organism
+- Boot: splash + font atlas warm-up before Title
+- Glow: one `begin_glow` batch per Running frame for soft blobs
+- New-game: burst LOD + incremental population seed under veil 
 
 ### 4.4 Fonty (Linux paths)
 - UI: `/usr/share/fonts/opentype/fira/FiraSans-Medium.otf`  
@@ -173,7 +181,7 @@ Aplikuje se při nové hře a po loadu.
 | Arg | Efekt |
 |-----|--------|
 | (none) | Title lobby |
-| `--shot` | Running, seed 7, 16 organismů, 6 food |
+| `--shot` | Running, seed 7, 16 organismů, 12 food |
 
 ---
 

@@ -70,7 +70,7 @@ pub enum FoodKind {
     Green = 0,
     /// Rich amber — short smell, high energy.
     Amber = 1,
-    /// Toxic violet — long smell, some energy, damages on eat.
+    /// Toxic violet — shorter smell than before so it does not dominate the dish.
     Toxic = 2,
 }
 
@@ -107,6 +107,15 @@ impl FoodKind {
     }
 }
 
+/// Mostly green starter meals, some amber, rare toxic — founders are not baited into poison first.
+fn starter_food_kind(i: usize) -> FoodKind {
+    match i % 8 {
+        0 | 1 | 2 | 3 | 4 => FoodKind::Green,
+        5 | 6 => FoodKind::Amber,
+        _ => FoodKind::Toxic,
+    }
+}
+
 /// Tunable attributes for one food variety.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct FoodSpec {
@@ -127,7 +136,7 @@ impl FoodSpec {
         [
             FoodSpec {
                 sense: 0.42,
-                energy: 0.42,
+                energy: 0.55,
                 harm: 0.0,
                 auto: false,
                 batch: 1,
@@ -135,8 +144,8 @@ impl FoodSpec {
                 color: (0.32, 0.85, 0.42),
             },
             FoodSpec {
-                sense: 0.22,
-                energy: 0.78,
+                sense: 0.26,
+                energy: 0.88,
                 harm: 0.0,
                 auto: false,
                 batch: 1,
@@ -144,9 +153,9 @@ impl FoodSpec {
                 color: (0.95, 0.72, 0.22),
             },
             FoodSpec {
-                sense: 0.70,
-                energy: 0.28,
-                harm: 0.48,
+                sense: 0.55,
+                energy: 0.22,
+                harm: 0.35,
                 auto: false,
                 batch: 1,
                 interval: 9.0,
@@ -418,7 +427,7 @@ pub struct World {
 
 impl World {
     pub fn new(seed: u64) -> Self {
-        Self::new_with(seed, 16, 6)
+        Self::new_with(seed, 16, 12)
     }
 
     pub fn new_with(seed: u64, population: usize, start_food: usize) -> Self {
@@ -452,7 +461,7 @@ impl World {
         }
         for i in 0..meals {
             let p = world.random_dish_point();
-            world.drop_food_kind(p, FoodKind::from_index(i));
+            world.drop_food_kind(p, starter_food_kind(i));
         }
         world.births = 0;
         world
@@ -481,6 +490,10 @@ impl World {
 
     pub fn dishes(&self) -> &[PetriDish] {
         &self.dishes
+    }
+
+    pub fn primary_dish_id(&self) -> u32 {
+        self.primary().id
     }
 
     pub fn tubes(&self) -> &[Tube] {
@@ -1086,6 +1099,46 @@ impl World {
         })
     }
 
+    /// Refresh activations on a cached [`Net`] when topology is unchanged.
+    pub fn refresh_net_acts(&self, id: u64, net: &mut Net) -> bool {
+        let Some(o) = self.organisms.iter().find(|o| o.id == id) else {
+            return false;
+        };
+        if net.act.len() != o.brain.neuron_count() {
+            return false;
+        }
+        for (i, slot) in net.act.iter_mut().enumerate() {
+            *slot = o.brain.activation(i);
+        }
+        true
+    }
+
+    /// Spawn up to `n` organisms at random dish points. Returns how many were created.
+    pub fn spawn_boot_organisms(&mut self, n: usize) -> usize {
+        let room = MAX_POP.saturating_sub(self.organisms.len());
+        let n = n.min(room);
+        let mut made = 0;
+        for _ in 0..n {
+            let p = self.random_point(0.82);
+            self.spawn_at(p);
+            made += 1;
+        }
+        made
+    }
+
+    /// Drop up to `n` starter food items. `kind_offset` cycles food kinds.
+    pub fn spawn_boot_food(&mut self, n: usize, kind_offset: usize) -> usize {
+        let room = FOOD_CAP.saturating_sub(self.food_count());
+        let n = n.min(room);
+        let mut made = 0;
+        for i in 0..n {
+            let p = self.random_dish_point();
+            self.drop_food_kind(p, FoodKind::from_index(kind_offset + i));
+            made += 1;
+        }
+        made
+    }
+
     pub fn stats(&self, id: u64) -> Option<Stats> {
         let o = self.organisms.iter().find(|o| o.id == id)?;
         Some(Stats {
@@ -1501,6 +1554,7 @@ impl World {
                 let foods = &self.dishes[di].foods;
                 let (smell, aim, kind_smells) = food_pull(foods, &self.food_kinds, head, &taste);
                 let dish = &self.dishes[di];
+                let side = axis.perp();
                 let inputs = lay_inputs(
                     org,
                     &Senses {
@@ -1508,6 +1562,8 @@ impl World {
                         half_y: dish.half_y,
                         food_kinds: kind_smells,
                         food_tail: sense_food(foods, &self.food_kinds, tail, &taste),
+                        food_fwd: aim.dot(axis),
+                        food_side: aim.dot(side),
                         pheromone: dish.fields.sample(Channel::Signal, head),
                         kin,
                         similar,
@@ -1517,10 +1573,9 @@ impl World {
                     },
                 );
                 let _ = smell;
-                (inputs, aim, dish.half_x, dish.half_y)
+                inputs
             };
-            let (inputs, aim, hx, hy) = inputs;
-            self.organisms[i].think(&inputs, aim, hx, hy, dt);
+            self.organisms[i].think(&inputs, dt);
         }
     }
 
@@ -1557,6 +1612,7 @@ impl World {
                 continue;
             };
             let head = org.head();
+            let reach = FOOD_BITE.max(org.radius() * 0.65);
             for (fi, food) in self.dishes[di].foods.iter().enumerate() {
                 if !food.alive()
                     || taken
@@ -1565,7 +1621,7 @@ impl World {
                 {
                     continue;
                 }
-                if (food.pos - head).length() <= FOOD_BITE {
+                if (food.pos - head).length() <= reach {
                     taken.push((oi, di, fi));
                     break;
                 }
