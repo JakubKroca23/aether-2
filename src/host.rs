@@ -3,6 +3,12 @@
 //! These are plain `env` imports so the wasm module stays free of wasm-bindgen.
 //! The simulation library still does not link Macroquad.
 
+/// Lets `aether_host.js` pass the miniquad plugin version check.
+#[no_mangle]
+pub extern "C" fn aether_host_crate_version() -> u32 {
+    1
+}
+
 #[link(wasm_import_module = "env")]
 extern "C" {
     fn aether_unix_ms() -> f64;

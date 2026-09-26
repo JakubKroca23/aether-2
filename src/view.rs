@@ -249,6 +249,8 @@ pub async fn run() {
     }
     let mut audio = AudioHub::boot().await;
     let mut bloom_on = true;
+    // On the web, exitFullscreen() rejects unless the page is already fullscreen.
+    #[cfg(not(target_arch = "wasm32"))]
     set_fullscreen(false);
 
     // Soft fade out of splash into lobby (helix stays full, then dissolves).
