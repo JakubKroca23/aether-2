@@ -113,12 +113,14 @@ Rychlost: speed presets 1× … 100× (UI).
 
 ## 3. Persistace
 
-**Cesta DB:** `{dirs::data_dir}/aether/aether.db`
+**Desktop:** SQLite `{dirs::data_dir}/aether/aether.db`
 
 **Schema `saves`:**
 - `id`, `name` UNIQUE, timestamps  
 - `sim_time`, `population`, `max_generation`  
 - `payload` BLOB = bincode `WorldSnapshot`
+
+**Web (`wasm32`):** stejné API nad pamětí stránky, zrcadlené do `localStorage` (`aether.saves.v1`, bincode + hlavička `AETHSAV1`). Obnovení stránky uložení zachová, dokud se vejde do kvóty prohlížeče; při selhání zápisu běží dál jen v paměti. SQLite ani `dirs` se na webu nelinkují.
 
 API: `open_default`, `list_saves`, `save_simulation`, `load_simulation`, `delete_save`, `rename_save`.
 
