@@ -8,7 +8,9 @@ use macroquad::prelude::*;
 use crate::audio::{AudioHub, Mix, Sfx};
 use crate::gfx::Gfx;
 
+#[cfg(not(target_arch = "wasm32"))]
 const FONT_PATH: &str = "/usr/share/fonts/opentype/fira/FiraSans-Medium.otf";
+#[cfg(not(target_arch = "wasm32"))]
 const LOGO_FONT_PATH: &str = "/usr/share/fonts/opentype/fira/FiraSans-Heavy.otf";
 /// Bottom tool dock stays screen-fixed; dish chrome is in world units below.
 const TOOL: f32 = 84.0;
@@ -138,19 +140,62 @@ impl BootConfig {
     }
 }
 
-pub async fn run() {
-    let shot = std::env::args().any(|a| a == "--shot");
-    let mut seed = if shot {
-        7
-    } else {
+fn cli_shot() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::args().any(|a| a == "--shot")
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Web page opened with `?run=1`. Native builds never take this path.
+fn browser_auto_run() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        aether::web_auto_run()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
+fn unix_nanos(fallback: u64) -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
-            .unwrap_or(1)
+            .unwrap_or(fallback)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // `SystemTime::now` panics on wasm32-unknown-unknown.
+        let ms = aether::unix_millis();
+        if ms == 0 {
+            fallback
+        } else {
+            ms.saturating_mul(1_000_000)
+        }
+    }
+}
+
+pub async fn run() {
+    let shot = cli_shot();
+    // `--shot` on desktop, `?run=1` in the browser. The fast-forward + PNG
+    // exit stays desktop-only (`shot`).
+    let skip_lobby = shot || browser_auto_run();
+    let mut seed = if shot {
+        7
+    } else {
+        unix_nanos(1)
     };
 
     // Boot splash: glass DNA helix fills with color as assets load (skip for --shot).
-    if !shot {
+    if !skip_lobby {
         for i in 0..4 {
             let t = (i as f32 + 1.0) / 12.0;
             paint_boot_splash(None, t, 1.0);
@@ -159,27 +204,39 @@ pub async fn run() {
     }
 
     let mut boot = BootConfig::default();
-    let mut world = if shot {
+    let mut world = if skip_lobby {
         World::new_with(seed, 16, 12)
     } else {
         World::new_with(seed, 0, 0)
     };
     boot.apply(&mut world);
-    if !shot {
+    if !skip_lobby {
         paint_boot_splash(None, 0.22, 1.0);
         next_frame().await;
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let font = load_ttf_font(FONT_PATH).await.ok();
-    if !shot {
+    #[cfg(target_arch = "wasm32")]
+    let font = load_ttf_font_from_bytes(include_bytes!(
+        "../assets/fonts/FiraSans-Medium.otf"
+    ))
+    .ok();
+    if !skip_lobby {
         paint_boot_splash(font.as_ref(), 0.42, 1.0);
         next_frame().await;
     }
+    #[cfg(not(target_arch = "wasm32"))]
     let logo_font = load_ttf_font(LOGO_FONT_PATH).await.ok();
+    #[cfg(target_arch = "wasm32")]
+    let logo_font = load_ttf_font_from_bytes(include_bytes!(
+        "../assets/fonts/FiraSans-Heavy.otf"
+    ))
+    .ok();
     let mut gfx = Gfx::try_new();
     if gfx.is_none() {
         eprintln!("aether: custom shaders unavailable, using CPU draw fallback");
     }
-    if !shot {
+    if !skip_lobby {
         paint_boot_splash(logo_font.as_ref().or(font.as_ref()), 0.62, 1.0);
         next_frame().await;
         warm_font_atlas(&font, &logo_font);
@@ -192,10 +249,12 @@ pub async fn run() {
     }
     let mut audio = AudioHub::boot().await;
     let mut bloom_on = true;
+    // On the web, exitFullscreen() rejects unless the page is already fullscreen.
+    #[cfg(not(target_arch = "wasm32"))]
     set_fullscreen(false);
 
     // Soft fade out of splash into lobby (helix stays full, then dissolves).
-    if !shot {
+    if !skip_lobby {
         for i in 0..10 {
             let fade = 1.0 - (i as f32 + 1.0) / 10.0;
             paint_boot_splash(logo_font.as_ref().or(font.as_ref()), 1.0, fade);
@@ -203,7 +262,11 @@ pub async fn run() {
         }
     }
 
-    let mut phase = if shot { Phase::Running } else { Phase::Title };
+    let mut phase = if skip_lobby {
+        Phase::Running
+    } else {
+        Phase::Title
+    };
     let mut title_msg: Option<(String, f32)> = None;
     let mut title_settings_open = false;
     let mut paused = false;
@@ -553,10 +616,7 @@ pub async fn run() {
                 } else if hit_rect(mouse, ui.new_sim) {
                     title_msg = None;
                     title_settings_open = false;
-                    seed = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(seed.wrapping_add(1));
+                    seed = unix_nanos(seed.wrapping_add(1));
                     boot = BootConfig::default();
                     audio.play(Sfx::Transit);
                     begin_screen_transit(&mut screen_transit, Phase::Running, Some(seed));
@@ -1940,6 +2000,7 @@ pub async fn run() {
             net_cache = None;
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         if shot && world.time() >= 18.0 {
             let img = get_screen_data();
             image::save_buffer(

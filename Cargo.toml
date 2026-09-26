@@ -5,13 +5,25 @@ edition = "2021"
 description = "Petri dish of organisms controlled only by their own neural networks"
 
 [dependencies]
-macroquad = { version = "0.4", features = ["audio"] }
 rand = "0.8.5"
-image = "0.24.9"
 serde = { version = "1", features = ["derive"] }
 bincode = "1.3"
+
+# Desktop keeps Macroquad audio, SQLite saves, and the screenshot helper.
+# The web target drops those: rusqlite/dirs do not build for wasm, and the
+# audio feature would stall boot if WebAudio failed to decode the silent
+# placeholder clips (the mix is already muted).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+macroquad = { version = "0.4", features = ["audio"] }
+image = "0.24.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
+
+# `custom` satisfies getrandom on wasm32-unknown-unknown without wasm-bindgen,
+# which the Macroquad JS loader does not provide. The filler is in main.rs.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+macroquad = { version = "0.4" }
+getrandom = { version = "0.2.17", features = ["custom"] }
 
 [profile.dev]
 opt-level = 1
