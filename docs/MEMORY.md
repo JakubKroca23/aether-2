@@ -1,7 +1,7 @@
 # Dlouhodobá paměť projektu (Aether)
 
 Živý dokument: rozhodnutí, konvence a kontext, které mají přežít jednotlivé chaty.  
-**Aktualizuj při větších změnách.** Poslední sync: 2026-09-24.
+**Aktualizuj při větších změnách.** Poslední sync: 2026-09-26.
 
 ---
 
@@ -23,7 +23,7 @@
 4. **Jediný hardcoded pud = přežití** — tlama + urgency k jídlu při hladu; pohyb/útok/signal/repro řídí NN.  
 5. **Dish-local souřadnice** pro těla/jídlo; table transform přes `PetriDish::{to_table,to_local}`.  
 6. **Kill-forward ≠ food mouth** — útok je záměrný actuator, ne kolize pusy s jídlem.  
-7. **Save = bincode snapshot + SQLite meta** — payload opaque blob.  
+7. **Save = bincode snapshot + SQLite meta** — payload opaque blob. Na webu stejný payload, ale bez SQLite: paměť stránky + `localStorage`.  
 8. **Macroquad font rendering** — pro dynamické škálování (zoom kamery, burst animace loga) vždy používat fixní základní `font_size` a měřítko předávat přes `font_scale` (příp. `font_scale_aspect`). Dynamická změna `font_size` každým snímkem nutí CPU rastrovat glyfy do atlasu a způsobuje těžké propady FPS.
 
 ---
@@ -72,6 +72,16 @@
 - Inspect: cache `Net` topologie + refresh aktivací; tenčí synapse křivky.
 
 ---
+
+## Web
+
+- Cíl `wasm32-unknown-unknown`, loader Macroquad (`web/mq_js_bundle.js`, gl.js version 2) + `web/aether_host.js`.
+- Nativní `cargo run` zůstává. Web audio feature je vypnuté (mix je stejně `master = 0`); placeholder WAV by na webu mohly boot zaseknout, když `decodeAudioData` selže.
+- `getrandom` na webu má feature `custom` (bez wasm-bindgen), jinak miniquad loader modul nenačte.
+- `SystemTime::now` se na webu nevolá (panika). Čas jde z `Date.now()` (`aether_unix_ms`).
+- Fonty: nativně dál systémové Fira OTF. Web vkládá `assets/fonts` (SIL OFL), protože v prohlížeči systémové cesty nejsou a výchozí font Macroquadu neumí češtinu.
+- `?run=1` přeskočí lobby (seedovaná miska). Desktop `--shot` pořád navíc přetočí na t=18 a uloží `shot.png`.
+- Nasazení: `.github/workflows/pages.yml` → GitHub Pages source **GitHub Actions**. URL: `https://jakubkroca23.github.io/aether-2/`.
 
 ## Audio stav
 
@@ -144,6 +154,7 @@
 | Rychlé hover ovládání & badge krmítek | Popisek pod krmítkem odstraněn (čistá plocha); při hoveru nad krmítkem se zobrazí vypínač ZAP/VYP a tlačítka −/+ pro rychlou změnu intervalu dávkování; spodní badge zobrazuje celkový počet krmítek bez ohledu na zapnutí |
 | Hitch fix & side tools | Boot splash + font warm-up; Running glow batch; burst LOD + incremental seed; nástroje vpravo nahoře (Jedinec bez pin / Krmítko / Nová kolonie); Net cache; detail = Shift+klik |
 | Survival pud vs NN | Jediný hardcoded pud = přežití druhu: tlama při hladu+vůni a urgency blend směru k jídlu. Chemotaxe/foraging jinak NN přes senzory `jídlo vpřed/stranou`. Bite 0.12, lehčí metabolismus, víc starter jídla (většinou zelené). |
+| Web build | wasm32 + mq_js_bundle; SQLite jen desktop; web save = paměť + localStorage; audio feature na webu off; Fira embedded jen ve wasm; Pages workflow na `main` |
 
 ---
 

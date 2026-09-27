@@ -2,7 +2,7 @@
 
 **Stav:** aktivní vývoj (v0.1.0)  
 **Žánr:** evoluční / life-sim sandbox v Petri misce  
-**Platforma:** desktop (Macroquad / OpenGL)
+**Platforma:** desktop (Macroquad / OpenGL) a web (`wasm32-unknown-unknown`, GitHub Pages)
 
 ## Co to je
 
@@ -56,7 +56,7 @@ Přechod *Nová hra*: zoom-in + radial blur + rozpad písmen/DNA směrem ke kame
 | Jazyk | Rust 2021 |
 | Render / window | Macroquad 0.4 (+ audio feature) |
 | Matematika | vlastní `Vec2` (+ glam přes macroquad) |
-| Persist | SQLite (`rusqlite` bundled) + `bincode` |
+| Persist | SQLite (`rusqlite` bundled) + `bincode`; web: paměť + `localStorage` |
 | Shadery | GLSL 100 (water, soft glow, bloom) |
 
 ## Spuštění
@@ -64,7 +64,10 @@ Přechod *Nová hra*: zoom-in + radial blur + rozpad písmen/DNA směrem ke kame
 ```bash
 cargo run                 # lobby
 cargo run -- --shot       # rovnou simulace (seed 7)
+./scripts/serve-web.sh    # totéž v prohlížeči (release wasm)
 ```
+
+Veřejně: <https://jakubkroca23.github.io/aether-2/> (`?run=1` přeskočí lobby).
 
 Dev profil: `opt-level = 1` (rychlejší simulace při debug buildu).
 

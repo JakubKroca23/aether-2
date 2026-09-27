@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aether</title>
+    <style>
+        html,
+        body,
+        canvas {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            position: absolute;
+            background: #05060c;
+            z-index: 0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas" tabindex="1"></canvas>
+    <!-- Macroquad / miniquad loader (gl.js version 2, matches miniquad 0.4). -->
+    <script src="mq_js_bundle.js"></script>
+    <script src="aether_host.js"></script>
+    <script>load("aether.wasm");</script>
+</body>
+</html>

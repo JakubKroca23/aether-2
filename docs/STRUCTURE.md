@@ -12,7 +12,11 @@ aether-2/
 │   └── MEMORY.md
 ├── .cursor/rules/            # Cursor project rules
 ├── .cargo/
-├── .gitignore                # /target, shot.png
+├── .github/workflows/pages.yml  # wasm release → GitHub Pages
+├── .gitignore                # /target, shot.png, web/dist
+├── assets/fonts/             # Fira Sans (OFL) vložené jen do wasm buildu
+├── scripts/serve-web.sh      # lokální wasm build + statický server
+├── web/                      # index.html, mq_js_bundle.js, aether_host.js
 ├── shot.png                  # (ignorováno) screenshot helper
 ├── src/
 │   ├── main.rs               # bin entry, window conf
@@ -25,7 +29,8 @@ aether-2/
 │   ├── dish.rs               # PetriDish, Tube
 │   ├── field.rs              # chemická mřížka
 │   ├── spatial.rs            # spatial hash
-│   ├── store.rs              # SQLite saves
+│   ├── store.rs              # SQLite saves (web: paměť + localStorage)
+│   ├── host.rs               # wasm: čas, ?run=1, localStorage importy
 │   ├── tune.rs               # konstanty balansu
 │   ├── math.rs               # Vec2, hue helpers
 │   ├── gfx.rs                # GLSL materials
@@ -76,7 +81,8 @@ Orchestruje tick: senses → brain → actuators → physics → eat/bite/repro 
 Public typy: `World`, `Food`, `FoodKind`, `FoodSpec`, `Feeder`, `EdgeZone`, `Stats`, `Appearance`, `Census`, snapshot pro save.
 
 ### `store.rs`
-SQLite v user data dir (`…/aether/aether.db`), tabulka `saves`, payload = bincode `WorldSnapshot`.
+Desktop: SQLite v user data dir (`…/aether/aether.db`), tabulka `saves`, payload = bincode `WorldSnapshot`.  
+Web: stejné funkce nad `Db` v paměti, persist do `localStorage` přes `host.rs`.
 
 ## Mapa modulů (bin)
 
