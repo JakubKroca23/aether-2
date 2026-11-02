@@ -34,10 +34,38 @@ jobs:
 
       - name: Assemble site
         run: |
+          set -euo pipefail
           mkdir -p site
-          cp web/index.html web/mq_js_bundle.js web/aether_host.js site/
-          cp target/wasm32-unknown-unknown/release/aether.wasm site/aether.wasm
+
+          hash8() { sha256sum "$1" | cut -c1-8; }
+
+          WASM_SRC=target/wasm32-unknown-unknown/release/aether.wasm
+          MQ_SRC=web/mq_js_bundle.js
+          HOST_SRC=web/aether_host.js
+
+          WASM_HASH=$(hash8 "$WASM_SRC")
+          MQ_HASH=$(hash8 "$MQ_SRC")
+          HOST_HASH=$(hash8 "$HOST_SRC")
+
+          WASM_NAME="aether.${WASM_HASH}.wasm"
+          MQ_NAME="mq_js_bundle.${MQ_HASH}.js"
+          HOST_NAME="aether_host.${HOST_HASH}.js"
+
+          cp "$WASM_SRC" "site/${WASM_NAME}"
+          cp "$MQ_SRC" "site/${MQ_NAME}"
+          cp "$HOST_SRC" "site/${HOST_NAME}"
+
+          # Rewrite asset references in index.html (mq_js_bundle load("aether.wasm")
+          # takes the path from the call site; no hard-coded wasm name inside the bundle).
+          sed \
+            -e "s|src=\"mq_js_bundle.js\"|src=\"${MQ_NAME}\"|" \
+            -e "s|src=\"aether_host.js\"|src=\"${HOST_NAME}\"|" \
+            -e "s|load(\"aether.wasm\")|load(\"${WASM_NAME}\")|" \
+            web/index.html > site/index.html
+
           touch site/.nojekyll
+          echo "Hashed assets: ${WASM_NAME} ${MQ_NAME} ${HOST_NAME}"
+          cat site/index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
